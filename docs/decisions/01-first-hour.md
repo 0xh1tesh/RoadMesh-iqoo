@@ -17,7 +17,7 @@ Status key: [x] done · [ ] open · [~] needs the loaner phones
   - Develop, run and read logcat on our OWN phones (adb works there). Loaners only get builds that already ran clean on an own phone, because crashes on a loaner show up in HackTracker.
   - Install on loaners: build the APK, move it with Office Kit file transfer, open it from the phone's file manager. Needs "install unknown apps" for the file manager (not a debugging setting).
   - Everything adb would show lives in the app: SetupCheck (Build.*, BLE caps, voices), log ring, stats, JSON export via Office Kit, `ApplicationExitInfo`, settings editor on the phone.
-- [x] **GATE 1 settled (9 Oct): sideloading is allowed.** Build APK on laptop, move via Office Kit file transfer, install from the file manager. Still confirm once with the skeleton build on a loaner, and keep a last-known-good APK on every phone.
+- [x] **GATE 1 settled (9 Oct): sideloading is allowed.** Build APK on laptop, move via Office Kit file transfer, install from the file manager. **Confirmed on a loaner: the skeleton APK installs and runs.** Keep a last-known-good APK on every phone. Office Kit transfer failed once with a network error (venue Wi-Fi), then worked.
 
 ## B. Ask the organisers (the answer goes below each line)
 1. Which Red/Green windows apply? (The booklet shows a boundary at 14:00 on Saturday; the site data said 13:00.)
