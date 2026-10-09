@@ -1,0 +1,20 @@
+# Android / Gradle
+.gradle/
+build/
+local.properties
+*.apk
+*.aab
+.idea/
+*.iml
+captures/
+# Models and data are downloaded at build or first run, never committed
+*.tflite
+*.onnx
+*.gguf
+*.bin
+test-data/*.csv
+# Exports
+exports/
+
+# Private research dossier (kept local, not published)
+docs/research/
