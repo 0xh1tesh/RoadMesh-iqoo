@@ -14,6 +14,7 @@ Zero-hardware V2X for every road user. **Private repository: team JSONs only.** 
 | `app/.../radio/`, `sensing/`, `perception/`, `output/`, `audio/` | BLE, sensors, camera detector ladder, speech and haptics, siren (stretch) |
 | `app/.../service/`, `diag/`, `ui/`, `copilot/` | Foreground service, stats and export, screens, on-device LLM |
 | `tools/viewer/` | Offline laptop log viewer (stretch) |
+| `simulator/` | ResiLane: shared-AR vehicle simulator and YOLO feed (standalone Gradle project, see `simulator/README.md`) |
 | `docs/` | PRD, architecture, implementation plan, decisions log, research dossier |
 | `test-data/` | Replay datasets (not committed) |
 

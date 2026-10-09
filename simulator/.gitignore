@@ -1,0 +1,16 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+captures/
+tools/.venv/
+tools/out/
+*.pt
+*.apk
+!dist/*.apk
+tools/bin/
+assets_src/
+core/build/
+dist/
+graphify-out/
