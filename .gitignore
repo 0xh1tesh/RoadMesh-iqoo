@@ -1,5 +1,6 @@
 # Android / Gradle
 .gradle/
+.kotlin/
 build/
 local.properties
 *.apk
@@ -15,3 +16,5 @@ captures/
 test-data/*.csv
 # Exports
 exports/
+__pycache__/
+*.pyc

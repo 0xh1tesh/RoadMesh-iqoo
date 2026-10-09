@@ -5,15 +5,15 @@ plugins {
 
 android {
     namespace = "org.resilane.sim"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "org.resilane.sim"
         // ARCore requires API 24+.
         minSdk = 24
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.3.0"
+        versionCode = 5
+        versionName = "0.4.0"
         ndk { abiFilters += listOf("arm64-v8a") }
     }
 
@@ -51,7 +51,7 @@ android {
 }
 
 dependencies {
-    implementation(project(":core"))
+    implementation(project(":scene"))
 
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.activity:activity-ktx:1.9.0")

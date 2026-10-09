@@ -26,8 +26,8 @@ class YoloOnnxTest {
     private val root = File(System.getProperty("resilane.root") ?: "..")
 
     @Test fun shippedModelFindsTheRenderedCar() {
-        val model = File(root, "app/src/main/assets/models/yolo11n_640x320.onnx")
-        if (!model.exists()) { println("SKIPPED: ${model.path} missing, run tools/fetch_model.py"); return }
+        val model = File(root, "scene/src/main/assets/models/yolo11n_640x320.onnx")
+        check(model.exists()) { "Model test requested but ${model.path} is missing. Run tools/fetch_model.py first." }
         val img = ImageIO.read(javaClass.getResource("/render_car_d08_a030.jpg"))
         val env = OrtEnvironment.getEnvironment()
         env.createSession(model.readBytes()).use { s ->

@@ -20,16 +20,17 @@ import java.util.Locale
 /** One line of the device report. ok = null means "information only". */
 data class Probe(val name: String, val value: String, val ok: Boolean? = null)
 
-val REQUIRED_PERMISSIONS = arrayOf(
+val REQUIRED_PERMISSIONS = buildList {
+    addAll(listOf(
     Manifest.permission.BLUETOOTH_SCAN,
     Manifest.permission.BLUETOOTH_ADVERTISE,
     Manifest.permission.BLUETOOTH_CONNECT,
     Manifest.permission.ACCESS_FINE_LOCATION,
+    Manifest.permission.ACCESS_COARSE_LOCATION,
     Manifest.permission.CAMERA,
-    Manifest.permission.RECORD_AUDIO,
-    Manifest.permission.POST_NOTIFICATIONS,
-    Manifest.permission.NEARBY_WIFI_DEVICES,
-)
+    ))
+    if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
+}.toTypedArray()
 
 object DeviceProbe {
 

@@ -24,13 +24,24 @@ def heading(yaw):
 
 
 def parse(b):
+    try:
+        return _parse(b)
+    except (struct.error, IndexError, ValueError):
+        return None
+
+
+def _parse(b):
     if len(b) < 18:
         return None
     magic, ver, typ, ttl, _flags, origin, seq = struct.unpack_from("<HBBBBqi", b, 0)
-    if magic != MAGIC or ver != 1:
+    if magic != MAGIC or ver not in (1, 2) or typ not in TYPES:
         return None
     p = 18
-    m = {"type": TYPES.get(typ, typ), "origin": origin & 0xFFFFFFFFFFFFFFFF, "seq": seq}
+    session = 0
+    if ver == 2:
+        session, = struct.unpack_from("<Q", b, p)
+        p += 8
+    m = {"type": TYPES[typ], "origin": origin & 0xFFFFFFFFFFFFFFFF, "seq": seq, "session": session}
     if typ == 1:
         n = b[p]; m["name"] = b[p + 1:p + 1 + n].decode("utf8", "replace"); p += 1 + n
         m["model"], m["color"], m["scale"], m["marker_mm"] = struct.unpack_from("<Biff", b, p)

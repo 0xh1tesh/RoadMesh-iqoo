@@ -52,12 +52,12 @@ object BleProbe {
         context: Context,
         maxTry: Int = 10,
         onDone: (count: Int, note: String) -> Unit,
-    ) {
+    ): () -> Unit {
         val adapter = context.getSystemService(BluetoothManager::class.java)?.adapter
         val advertiser = adapter?.bluetoothLeAdvertiser
         if (adapter == null || advertiser == null) {
             onDone(0, "no advertiser (Bluetooth off or unsupported)")
-            return
+            return {}
         }
         val extended = adapter.isLeExtendedAdvertisingSupported
         val mode = if (extended) "extended" else "legacy"
@@ -72,15 +72,18 @@ object BleProbe {
         val callbacks = mutableListOf<AdvertisingSetCallback>()
         var started = 0
         var finished = false
+        var timeout: Runnable? = null
 
         fun finish(note: String) {
             if (finished) return
             finished = true
+            timeout?.let { main.removeCallbacks(it) }
             callbacks.forEach { runCatching { advertiser.stopAdvertisingSet(it) } }
             onDone(started, note)
         }
 
         fun startNext(index: Int) {
+            if (finished) return
             if (index >= maxTry) {
                 finish("reached the test limit of $maxTry (mode: $mode)")
                 return
@@ -90,6 +93,7 @@ object BleProbe {
                 .build()
             val callback = object : AdvertisingSetCallback() {
                 override fun onAdvertisingSetStarted(set: AdvertisingSet?, txPower: Int, status: Int) {
+                    if (finished) { runCatching { advertiser.stopAdvertisingSet(this) }; return }
                     if (status == ADVERTISE_SUCCESS) {
                         started += 1
                         main.post { startNext(index + 1) }
@@ -106,7 +110,9 @@ object BleProbe {
             }
         }
 
-        main.postDelayed({ finish("timeout after 15 s") }, 15_000)
+        timeout = Runnable { finish("timeout after 15 s") }
+        main.postDelayed(timeout!!, 15_000)
         startNext(0)
+        return { if (Looper.myLooper() == Looper.getMainLooper()) finish("cancelled") else main.post { finish("cancelled") }; Unit }
     }
 }

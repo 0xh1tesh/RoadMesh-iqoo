@@ -22,6 +22,7 @@ if (-not $items) { throw "No phone linked in Office Kit. Connect one in the Offi
 foreach ($it in $items) {
     $json = '{\"path\":[\"' + $File + '\"],\"mode\":0}'
     Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe) `
+        -WindowStyle Hidden `
         -ArgumentList "--target=/filemanager --deviceid=$($it.name) `"--filepath=$json`""
     Write-Output "sent $File -> $($it.text) ($($it.name)); check Office Kit's transfer list"
 }

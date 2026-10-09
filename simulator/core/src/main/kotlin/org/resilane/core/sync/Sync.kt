@@ -147,22 +147,31 @@ class RemoteNode(val id: Long, val simulated: Boolean = false) {
 }
 
 /** All peers this node has heard of. Thread-safe; network threads write, the render thread reads. */
-class NodeRegistry(val selfId: Long) {
+class NodeRegistry(val selfId: Long, private val capacity: Int = 1_024) {
     private val nodes = LinkedHashMap<Long, RemoteNode>()
+    private val heardAt = HashMap<Long, Long>()
+    init { require(capacity > 0) }
 
     @Synchronized
-    fun getOrCreate(id: Long, simulated: Boolean = false): RemoteNode? =
-        if (id == selfId) null else nodes.getOrPut(id) { RemoteNode(id, simulated) }
+    fun getOrCreate(id: Long, simulated: Boolean = false, now: Long = System.currentTimeMillis()): RemoteNode? {
+        if (id == selfId || id !in nodes && nodes.size >= capacity) return null
+        heardAt[id] = now
+        return nodes.getOrPut(id) { RemoteNode(id, simulated) }
+    }
 
     @Synchronized fun get(id: Long) = nodes[id]
-    @Synchronized fun remove(id: Long) = nodes.remove(id)
+    @Synchronized fun remove(id: Long): RemoteNode? { heardAt.remove(id); return nodes.remove(id) }
     @Synchronized fun all(): List<RemoteNode> = nodes.values.toList()
-    @Synchronized fun removeSimulated() { nodes.values.removeAll { it.simulated } }
+    @Synchronized fun removeSimulated() {
+        val ids = nodes.values.filter { it.simulated }.map { it.id }
+        ids.forEach { remove(it) }
+    }
 
     /** Drops real peers not heard from in [forgetAfterMs]; simulated test nodes stay until cleared. */
     @Synchronized
     fun pruneLost(now: Long, forgetAfterMs: Long = 60_000) {
-        nodes.values.removeAll { !it.simulated && it.lastRecvLocal != 0L && now - it.lastRecvLocal > forgetAfterMs }
+        val ids = nodes.values.filter { !it.simulated && now - (heardAt[it.id] ?: now) > forgetAfterMs }.map { it.id }
+        ids.forEach { remove(it) }
     }
 }
 

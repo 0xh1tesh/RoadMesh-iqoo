@@ -1,193 +1,110 @@
-# RoadMesh Android architecture
-*ECC `architect` agent, 2026-10-09, from the council scope (10) plus 02, 09, packet.js and mesh.js. Integrator notes are marked ▸. Design notes only: all code is written at the event.*
+﻿# RoadMesh architecture — expandable base, revision 1
 
-## 1. Components and layout
+This document describes the implemented starting layer. Interfaces, packet extensions, limits and module boundaries can change as measurements and product requirements arrive. It is not the final architecture. Earlier broader proposals are retained in [archive/architecture-research.md](archive/architecture-research.md).
 
-```
-ImuSource ──────────────► HardBrakeDetector ◄─ speed ─ PositionSource (Gnss|Trace|Demo)
-FrameSource (CameraX|Clip) ► DetectorLadder (QNN▸GPU▸CPU) ► Tracker ► Looming, PedAhead
-MicSource* ► SirenDetector*                      │ Hazard
-                                                 ▼
-                        AlertFactory, PresenceBeaconer ─┐
-Scanner ► rxChannels ► MeshActor ► RelayScheduler ──────┴► TxActor ► Advertiser sets A alert | B relay | C presence
-          (decode▸allowlist▸fresh▸verify▸dedup)
-               └► NeighbourTable ► Arbiter (relevance▸plausibility▸tier) ► Announcer (TTS, haptics), UI
-all ► DiagBus ► LogRing | Stats | Exporter ► Office Kit ► tools/viewer
-SettingsStore (JSON) ► StateFlow<Settings> ► all                         * gated stretch
-```
+## Boundaries
 
-```
-com.jsons.roadmesh            App + AppGraph (manual DI)
-  core/       pure Kotlin + java.*, no android.* (a unit test greps imports)
-    protocol/ Packet, PacketCodec, CauseTable, Envelope
-    geo/      Geo (port of mesh.js)
-    mesh/     DedupCache, RelayPolicy, NeighbourTable
-    arbiter/  Arbiter, Plausibility, TrustPolicy
-    detect/   HardBrakeDetector, LoomingDetector, PedAheadRule
-    sensor/   SensorSource, CsvReplaySource, Clock
-    config/   Settings, Presets
-  radio/      BleCaps, RadioLink, TxActor, Advertiser, Scanner, ScanBudget
-  sensing/    LiveImu, LiveGnss, GnssClock, TraceReplay, DemoTrack
-  perception/ FrameSource, DetectorLadder, Detector (Qnn|Gpu|Cpu), Tracker
-  output/     Announcer, Haptics    audio/ SirenDetector*
-  service/    MeshService           diag/  DiagBus, Stats, PingPong, Exporter
-  ui/         Drive, Stats, Log, SettingsEditor, SetupCheck
-  copilot/    LlmEngine, Debrief, VoiceReport, WhyExplainer (▸ core since the venue booklet; reads logs only, never on the alert path)
-tools/viewer/ index.html, viewer.js, packet2.js
+```mermaid
+flowchart LR
+  Scene[Reusable virtual car scene] -->|SceneEvent.BrakeStarted| Adapter[RoadMesh scene adapter]
+  Live[Future live hazard sources] -.->|LocalHazard| Engine
+  Adapter -->|LocalHazard / DEMO| Engine[Pure Kotlin MeshEngine]
+  Position[PositionSource / demo or GNSS] --> Engine
+  BLE[HazardTransport / BLE] -->|owned byte copies / bounded inbox| Engine
+  Engine -->|Transmit effect / bounded TX queue| BLE
+  Engine -->|Announce effect| Output[Offline speech + haptics]
+  Engine -->|Received + diagnostics| State[StateFlow dashboard + bounded log]
+  State --> Export[Downloads JSON]
+  Pose[Nearby + UDP scene pose sync] --> Scene
 ```
 
-The laptop viewer is offline. It loads the exported JSON and shows a timeline, PDR and latency, and a hex decode. It uses the same golden test vectors as the Kotlin codec tests.
+`core/` has no Android imports, UI, graphics, inference, I/O or radio callbacks. `MeshEngine` is a single-owner state machine with explicit clock, position and link-policy ports. It returns effects. `RoadMeshApplication` is the small manual composition root. `MeshSession` owns runtime adapters and serializes engine commands; `MeshService` owns the foreground notification and wake lock.
 
-## 2. Module contracts
+`simulator/scene/` contains the friend's renderer and camera layer. It emits scene events without knowing anything about BLE. `RoadMeshSceneActivity` maps a virtual brake to `LocalHazard(BRAKING, DEMO, sourceEvent)`. The standalone `simulator/app/` extends the same activity. Nearby/UDP are only pose synchronization for that harness; they never carry operational hazards and are disabled in the pitch scene.
 
-Threads:
-- **main**: Compose and TTS. Scan callbacks also land here; they only copy the data and `trySend`.
-- **ble**: a HandlerThread for advertising callbacks.
-- **mesh**: one thread that owns dedup, the neighbour table, relay timers and the Arbiter. No locks needed.
-- **tx**: one thread that serialises advertiser calls.
-- **imu**: a HandlerThread for sensor and location callbacks. Detectors run on Default.
-- **perception**: one executor for the image analyzer and inference.
-- **IO**: logs, export and settings.
+## One app and three presentation roles
 
-Everything runs under MeshService's SupervisorJob, so a failing module logs and restarts alone. The alert path never touches IO.
-
-| Module | Contract | Failure |
+| Phone | Role | Actual behavior |
 |---|---|---|
-| SettingsStore | `settings: StateFlow<Settings>`; `apply(json): Result<Settings>` | rejects with the JSON path, keeps last good; 2 crashes within 60 s of a change → defaults |
-| Clock | `nowMs()` from `SystemClock.currentGnssTimeClock()`, else wall clock | "time: network" badge |
-| SensorSource, PositionSource | `samples(): Flow<ImuSample>` (100 Hz, unbatched); `fixes: StateFlow<Fix?>` (lat, lon, speed, heading?, accuracy, synthetic) | no fix for 10 s → null + banner; never switches to synthetic silently |
-| HardBrakeDetector | `onImu(s)`, `onFix(f): Hazard?`; two tiers, on horizontal \|a\|. Emits only after a speed drop confirms. The drop also gives the sign, so cornering never fires | no speed → counted, never sent |
-| Perception | `DetectorLadder.open(): Detector`; `detect(frame): List<Box>`; `onTracks(tracks, ownSpeed, t): List<Hazard>` | init error or warm-up p95 > 40 ms → next rung; thermal SEVERE → half fps; all rungs fail → camera off + banner |
-| AlertFactory, PresenceBeaconer | `build(h, fix): Packet` (seq, TTL, validity from CauseTable); beacons every 250/500/1000 ms by neighbour count, 10 s hysteresis | no fix → not sent |
-| MeshActor, RelayScheduler | `submit(raw)`; `accepted: SharedFlow<RxPacket>`; order: decode ▸ allowlist ▸ stale ▸ signature ▸ dedup ▸ relay wait. Dedup stores only validated packets, so a forged copy can't suppress the real one | drops counted by reason; alerts and presence use separate DROP_OLDEST channels, `select` prefers alerts |
-| TxActor | `RadioLink { rx: Flow<RawAdv>; suspend send(bytes, kind) }`; priority alert > pong > relay > presence; awaits each `onAdvertisingDataSet` (300 ms timeout) | TOO_MANY_ADVERTISERS → one multiplexed set; DATA_TOO_LARGE → unsigned core; FEATURE_UNSUPPORTED → legacy; INTERNAL_ERROR ×3 → next rung down |
-| Scanner | LOW_LATENCY, ALL_MATCHES, AGGRESSIVE, `setLegacy(false)`, magic-byte filter; restart every 8 min through ScanBudget (max 4 starts per 30 s) | no results for 5 s while neighbours were present → restart within budget |
-| Arbiter | `judge(p, me: Fix?, own): Decision` (Ignore(reason) \| Caution \| Urgent) | no own fix → RSSI > −75 dBm gives Caution "hazard nearby" |
-| Announcer | `announce(d)`; one template per kind and tier; Urgent = earcon + QUEUE_FLUSH; speaks once per hazard per validity window | TTS fails → earcon, haptics, full-screen card |
-| Diag | `log(e)` into a 5,000-entry ring; `export(): Uri` to MediaStore Downloads | Sharesheet |
-| MeshService | FGS `connectedDevice\|location` (+camera in dash mode), partial wake lock, START_STICKY | restarts and logs `ApplicationExitInfo` |
+| A | Detector | Camera/AR scene with a virtual vehicle; Brake starts a deceleration and rear lamp animation, then publishes one DEMO event |
+| B | Relay | Accepts A, schedules a relay, decrements TTL, preserves origin/session/sequence and broadcasts the same event |
+| C | Observer | Accepts B, checks relevance and displays a caution; emits offline speech and haptics once per accepted event |
 
-## 3. Protocol v2: the 27-byte core
+Stage role IDs are explicitly assigned 1, 2 and 3. Each phone must have a different role. Road mode uses a persisted random 64-bit node ID and a separately allocated 24-bit diagnostic alias. A new random session nonce is generated at every mesh start. Neither the 24-bit alias nor the 8-bit lastHop field is used for identity, deduplication or suppression.
 
-The core goes in manufacturer data under company ID 0xFFFF (the Bluetooth SIG test ID; a shipped product needs its own). The advertising data is 4 + 27 = 31 B exactly, so it carries no name, TX-power field or flags. The scan filter matches only the magic byte; the decoder checks the version.
+Stage positions are explicitly synthetic, 100 m apart, heading north. `StageChain` accepts only adjacent role IDs. The radio can physically hear all three phones; the filter deliberately prevents A-to-C acceptance. Starting TTL is 1, A's packet has hop 0, and B's forwarded packet has TTL 0 / hop 1. Therefore C observes **two radio links and one completed relay**. No reverse receipt is implemented. A can report a local burst, not C's delivery.
 
-| Byte | Field | Encoding |
+## Hazard wire format
+
+The existing protocol-v2 `PacketCodec` and its original 27-byte packet remain unchanged in `core/protocol/`. The implemented hazard adapter uses **extended advertising**, not a legacy downgrade, because full identities do not fit into the old packet alone.
+
+Envelope revision 1 is 58 bytes, network byte order:
+
+| Offset | Bytes | Field |
 |---|---|---|
-| 0 | magic | 0x52 |
-| 1 | version, class | 4 + 4 bits: version 2; class 1 ALERT (DENM), 2 PRESENCE (CAM/VAM), 3 PING, 4 PONG |
-| 2–4 | senderId | u24; rotates with a fresh advertising set and key pair (~10 min; never while an alert is live) |
-| 5–6 | seq | u16; msgKey = senderId‖seq replaces v1's u32 msgId, saves 2 B and gives PDR |
-| 7 | TTL, hop, flags | 2 + 2 + 4 bits; flags PROXY, SYNTH_POS, NO_HEADING, SIGNED |
-| 8–9 | tGen | 0.1 s since the top of the UTC hour (0–35,999) |
-| 10–17 | lat, lon | i32 at 1e-7°, rounded to 1e-5° (~1 m) |
-| 18–19 | speed | 0.01 m/s (ETSI units); 0xFFFF = unknown |
-| 20 | heading | 360/256° steps |
-| 21–22 | cause, subCause (ALERT); stationType, vruState (PRESENCE) | ETSI codes |
-| 23–24 | p1, p2 | per cause: distance ahead m, peak deceleration 0.1 m/s², TTC 0.1 s, confidence % |
-| 25 | lastHop | stage node number, else low byte of senderId |
-| 26 | validity | seconds (ETSI validityDuration) |
+| 0 | 27 | Original protocol-v2 core |
+| 27 | 1 | Extension tag 0x45 |
+| 28 | 1 | Envelope version 1 |
+| 29 | 8 | Origin node ID |
+| 37 | 8 | Origin session nonce |
+| 45 | 4 | Origin sequence, unsigned bit pattern |
+| 49 | 8 | Immediate forwarder node ID |
+| 57 | 1 | Provenance: DEMO=1, LIVE=2, REPLAY=3 |
 
-- **PING and PONG** reuse bytes 8–24 for the target senderId‖seq plus t1, t2, t3 (u32 ms). That is exactly 17 B.
-- **One deviation from the brief:** tGen counts within the hour, not within the minute. It costs the same 2 B, and a packet replayed 60 s later no longer looks fresh.
-- **Formats rejected:** CBOR/protobuf (variable size) and UPER DENM (too large).
+Manufacturer ID 0xFFFF is experimental. There is no signature in this revision. SIGNED, PROXY, unknown causes, unknown envelope revisions, malformed length, invalid provenance, identity inconsistencies and invalid coordinates are rejected. The operational engine does not accept bare legacy packets; the original codec remains usable for compatibility experiments. Future signing or richer hazard bodies should use a new negotiated envelope revision, not reinterpret revision 1.
 
-**ETSI mapping.** `CauseTable` is the single source of truth. It maps each AlertKind to its cause, subCause, validity, radius and TTS template:
-- Hard brake: 27/1.
-- EBA: 99/1, valid 2 s, relevant within 500 m.
-- PED_AHEAD: 97/4 with the PROXY flag.
-- Lead-vehicle braking seen by camera: 99/1 with PROXY.
-- EVA (siren): 95/1.
-- Local FCW: 97/1, never broadcast.
+On relaying only TTL, hop, legacy lastHop and full forwarder change. Origin identity, session, sequence, cause, coordinates, generation time and provenance stay constant. A relayed copy is not independent corroboration. The current trust output is always **caution**; authentication and urgent trust tiers are not implemented.
 
-PRESENCE carries the ETSI StationType (pedestrian 1, cyclist 2, motorcycle 4, car 5). A gateway can then emit a VAM or a DENM 12/x without reinterpreting anything.
+## Admission, relevance and bounded forwarding
 
-**Extended envelope (123 B).** Core ‖ Ed25519 public key (32 B) ‖ signature (64 B).
-- The signature covers "RMv2" ‖ core with TTL, hop and lastHop zeroed, so relays don't break it.
-- One key pair per pseudonym epoch. The first packet seen binds senderId to its key; a later mismatch is dropped.
-- This gives integrity across hops and stops anyone impersonating a live pseudonym. It does not prove identity; certificates are roadmap.
-- On the legacy rung, packets are unsigned and the trust tiers are unchanged.
+Receive order is decode → link policy → own copy/cause/flags/hop budget → provenance → freshness → coordinates/plausibility → bounded neighbor admission → duplicate progress suppression → dedup → origin/neighbor rate limits → receive/announce → relay timer.
 
-## 4. Data flows
+The 100 ms generation field is reconstructed to the nearest UTC hour. It is used for a coarse freshness window, with configurable future tolerance. Relay timers and expiry use monotonic time. This does not synchronize phone clocks and is never used to claim end-to-end latency. Rehearsal phones should have aligned system time; clock errors are counted as `stale_or_future`.
 
-**(a) Hard brake → relay → speak**
-1. IMU at 100 Hz (live or CsvReplay) → candidate.
-2. The next fix must show a speed drop → Hazard. Otherwise the candidate is dropped and counted. At 1 Hz GNSS this adds up to 1 s; measure it on day 1.
-3. ALERT 99/1 or 27/1, TTL 3, p1 = peak deceleration. The braking driver gets only a haptic tick.
-4. Set A: `setAdvertisingData` → callback → ~10 events → stop.
-5. Receiver: the scan callback copies bytes, RSSI and `timestampNanos`, then `trySend`.
-6. MeshActor runs its pipeline; NeighbourTable records senders per second and PDR.
-7. If TTL > 0, within 500 m and not behind: wait T = 200·(1 − min(d,R)/R) + U(0,20) ms.
-   - Cancel if ≥ C relayers are heard during the wait.
-   - Otherwise set B sends with TTL−1, hop+1, lastHop = me, using `enableAdvertising(true, 0, 3)`.
-   - Three hops use about 1 s of the 2 s age budget.
-8. Arbiter: relevance (ahead ≤ 400 m, bearing ≤ 30°, heading difference ≤ 45°) ▸ plausibility ▸ tier.
-9. Caution speaks "Caution, braking ahead, 150 metres". Urgent plays an earcon, says "Brake!" and gives a strong haptic. The time from tGen to speech is logged.
+Relevance requires a valid own fix and heading, an origin ahead within 400 m, heading difference <=45 degrees and bearing difference <=30 degrees. Missing heading means no spoken caution. Origin distance is checked against the number of traversed radio links and the configurable range envelope. These are experimental gates to tune from field evidence, not verified road thresholds.
 
-**(b) Camera → proxy alert**
-1. Input is live CameraX by default (KEEP_ONLY_LATEST, ~15 fps). ClipReplay is the disclosed, repeatable stage input.
-2. Detector → IoU tracker.
-3. PedAhead: a person in the own-lane corridor for ≥ 3 frames; distance from the pinhole model.
-4. Looming: the slope of ln(box size) over 0.5–1 s is 1/TTC. A proxy EBA fires when 1/TTC jumps while own speed is steady (|Δv| < 1 m/s). A local FCW fires at TTC < 2.5 s.
-5. ALERT with PROXY at own position. p1 = distance ahead, so receivers can project the hazard point; p2 = TTC or confidence. One alert per track per validity window.
-6. TX as in (a). A receiver upgrades it to Urgent when its own camera or a VRU beacon at that spot agrees.
+Relay delay favors farther receivers: `maxDelay * (1 - min(distance/range, 1)) + jitter`. A valid overheard copy with a higher hop can suppress a pending relay. Distinct full forwarder identities are counted before the duplicate-return path. Pending events expire before transmission. Relay copies keep one event key and cannot repeatedly announce it.
 
-**(c) Presence → warning**
-1. Pocket phone, screen off: PRESENCE on set C, TTL 0, data and seq refreshed at 1 Hz.
-2. Driver phone: NeighbourTable keeps a track of the VRU.
-3. A VRU in the corridor within v·4 s + 10 m → Caution "Pedestrian ahead, right". Urgent if own camera confirms or TTC < 2 s.
+Defaults, all validated through the JSON settings editor:
 
-**(d) Ping-pong**
-1. A sends PING with t1 (wall clock, ms). TTL 0–2 probes 1–3 hops.
-2. B maps `timestampNanos` to wall time as t2 and replies at once with PONG(t1, t2, t3).
-3. A takes t4 the same way. δ = (t4−t1) − (t3−t2), θ = ((t2−t1) + (t3−t4))/2, one-way latency ≈ δ/2.
-4. Run 50 probes at 1 Hz. Report p50, p95 and loss (2 s timeout), plus θ per neighbour, which reveals clock skew. Export as JSON.
-
-## 5. ADRs
-
-**ADR-1 Radio.** Non-connectable extended advertising sets at 100 ms, TX HIGH, 1M PHY. Use 2M or Coded PHY only if every phone's probe passes.
-- Alternatives: GATT (slow setup, connection limits), Nearby Connections (needs connections).
-- Fallback ladder:
-  - extended → legacy if extended is unsupported, max data < 127 B, or PDR at 10 m < 90% while legacy does better;
-  - → Wi-Fi Aware if p95 > 1 s or PDR < 80%;
-  - → cloud relay, flagged "degraded".
-- Fewer than 3 advertising sets → multiplex.
-
-**ADR-2 Detector.** AI Hub pattern: TFLite with the QNN delegate (YOLOX w8a8), then GPU, then XNNPack.
-- ▸ Licence: upstream YOLOX is reported as Apache-2.0, but AI Hub publishes per-model licences. Confirm the packaged model's licence on day 1.
-- ▸ One Chennai team's iQOO 15 log reports OpenCL missing for the LiteRT GPU path (single source). The CPU rung must be real: about 52 ms at 640 px for YOLO26n, which still allows 10 fps, or drop to 320 px.
-- Alternative: ONNX Runtime QNN EP with YOLO26n (AGPL), swappable behind `Detector`.
-- Trigger: init exception, warm-up p95 > 40 ms, or thermal SEVERE.
-
-**ADR-3 Position.** One `PositionSource` interface:
-- LiveGnss.
-- TraceReplay: a drive recorded on day 1.
-- DemoTrack: SYNTH_POS flag plus a banner; its scripted brake supplies the speed drop.
-- Alternative: Android mock location (hidden from the audience).
-- Trigger: no fix or accuracy > 20 m for 10 s → banner. Switching source is a deliberate, visible tap.
-- The demo layout must keep each hop shorter than R, or plausibility will reject it.
-
-**ADR-4 Trust.** One plausible sender → Caution. A second distinct originator within 50 m and 5 s, or own sensor → Urgent. Relayed copies never count as a second sender.
-- Implausible → logged only. That means origin > (hop+1)·Rmax, displacement/Δt > speed + 5 m/s, or stale.
-- Alternatives: signature as trust (no PKI), always Urgent (alert fatigue).
-- Trigger: false alarms in rehearsal → raise thresholds. The stage script includes one corroborated pair.
-
-**ADR-5 Settings as JSON.** One kotlinx.serialization `Settings` with an on-phone editor, presets (stage, road, pocket, fog), last-good copy and safe mode.
-- Diagnostics: Log, Stats, BleCaps and a self-test (codec vectors, detector benchmark, test voice).
-- Alternatives: preference screens (one per knob, slow to build), rebuilding for each tweak (impossible in Red Light).
-- Trigger: invalid JSON → rejected; crash loop → defaults.
-
-## 6. Red flags
-
-| Risk | Guard |
+| Resource | Starting limit |
 |---|---|
-| OriginOS kills or freezes the service | FGS started while the app is visible; wake lock. SetupCheck verifies battery exemption, autostart, background power and recents lock. Log shows heartbeat gaps and `ApplicationExitInfo` |
-| Silent scan throttling or the 10-min downgrade | ScanBudget, 8-min restart, watchdog; the UI never calls `startScan` directly |
-| Scanning stops with the screen off | filter always on; 15-min screen-off pocket test on day 1, with PDR read on a second phone |
-| `neverForLocation` filters beacon-like adverts | don't declare it; ask for fine location; SetupCheck confirms location is on |
-| Clock skew makes every packet stale | GNSS time; θ per neighbour; `maxAgeMs` setting |
-| Whole stage is in one radio cell | disclosed allowlist on lastHop; hop count shown on screen |
-| 2.4 GHz congestion in the hall | measure PDR in the hall on day 1; repeats; fallback ladder |
-| Slow first NPU inference, heat | warm-up at launch; thermal listener; clip replay |
-| TTS latency, missing offline voice, Do Not Disturb | pre-warm; `USAGE_ASSISTANCE_NAVIGATION_GUIDANCE`; SetupCheck test voice |
-| Android 16 permission prompts | first-run wizard; SetupCheck |
-| Office Kit can't see the export | MediaStore Downloads; Sharesheet |
+| Accepted event keys | 4,096, retained 30 s; reject new events when full, preserve live keys |
+| Immediate neighbors / origin rate entries | 1,024 each, expire after 30 s |
+| Pending relays | 64 |
+| Android command inbox / TX queue | 256 / 64; overflow counted, no unbounded backlog |
+| Relay bursts / local new events | 3 per second / 2 per second |
+| New received events per origin / immediate neighbor | 2 / 8 per second |
+| Diagnostic ring | Last 512 entries, 1,000 characters per detail |
+
+The engine remains bounded under dense traffic; overload can reduce delivery. Fleet size alone is not an airtime budget. The 100/300/500-node simulation uses neighborhoods of at most 14 peers across kilometers. Hundreds of radios all in one interference cell are not validated. Adaptive congestion control, priority queues, presence discovery, admission rules and metrics can be added behind these ports after measurements.
+
+## Android runtime
+
+BLE uses one non-connectable, non-scannable extended advertising set at interval 160 (100 ms) and high requested TX power. One TX coroutine serializes data updates (300 ms timeout), enable/disable acknowledgements and finite bursts: 10 requested events for origins, 3 for relays. Advertising is disabled between bursts. A local completion means the controller was enabled and subsequently disabled; it does not prove the number of packets received anywhere.
+
+Scanning filters manufacturer data on 0x52, uses non-legacy low-latency all-match scans with no batching, and restarts after 8 minutes or scan failure through a four-starts-per-30-seconds budget. Silence alone does not prove scan failure: this slice has no continuous presence beacons, so restarting after five quiet seconds would create false watchdog activity. TX failure ends the session visibly; no Nearby, cloud or legacy hazard fallback is hidden behind it.
+
+`MeshService` runs `connectedDevice`, adding `location` only in Road mode. It acquires a timed, renewable partial wake lock and releases transport, location, speech, coroutine and lock resources on Stop. `START_NOT_STICKY` requires an explicit restart after a process kill, so the selected role/profile is visible. OriginOS survival still needs the runbook's screen-off checks. The camera belongs to the visible scene activity; it is not a background camera service.
+
+The engine actor runs as one coroutine on a dispatcher with parallelism one; callbacks only copy and enqueue. TX/export/inference run separately, and Android speech/haptics are dispatched to Main. No engine API assumes a specific dispatcher. Queues are bounded so callback load cannot create unlimited work.
+
+Offline English TTS is selected only from non-network voices, with visual/haptic operation when none is available. Cautions close together are coalesced over 1.5 s to bound speech load. Engine acceptance remains once per event; dismissal only clears the visual card. There is no return ACK, measured PDR, synchronized latency, or claimed playback-completion timing.
+
+Road GNSS accepts recent, accurate, non-mock fixes. Missing GNSS never falls back to a demo track. Road mode rejects DEMO, REPLAY and SYNTH_POS. Live camera/IMU hazard producers are extension points, not connected features in this slice.
+
+## Scene and learning feed improvements
+
+The reusable scene retains ARCore tracking, the GLB car, contact shadows and the Camera2/rotation fallback. Landscape display rotation is applied to both fallback UV mapping and sensor orientation. 3DOF is labeled: turning works, walking does not translate the viewpoint. The car's braking timeline stops without reversing, and only the Brakelight/Taillight material glows; brake discs are not lamp materials.
+
+CPU model data is retained for GL context recreation, GL names are reset before reupload, bitmap data is released after activity teardown, Camera2's handler thread is closed, and overlay invalidation stops on pause. The pitch hides calibration/debug/network controls but the standalone harness keeps them.
+
+Optional inference loads lazily, reports a missing model explicitly, and never gates a brake event. The learning feed resolves the current GL backbuffer before swap, including MSAA, rather than capturing an asynchronously displayed frame with older metadata. It keeps that frame's ID and capture time, flips RGBA rows, and downsizes on the worker. Only one frame can be in flight. `FeedSink` borrows its bitmap synchronously; retaining it requires a copy. This capture path is optional and its GPU/readback cost still requires phone measurement.
+
+The separate scene protocol is revision 2 with a 64-bit session nonce. Revision 1 remains readable with session 0. Old sequences cannot reset the replay window; recent retired sessions remain rejected with bounded history. Scene peers and simulated cars are bounded, and hello-only peers expire. Python monitoring must decode both scene header revisions.
+
+## Next seams to expand
+
+Add live perception or IMU by producing validated `LocalHazard` events through the source contract. Add authentication through an envelope revision and a trust adapter before admission. Add larger deployments through neighborhood measurements, congestion control and simulation scenarios rather than changing UI roles into network roles. Add true latency/PDR only with an explicit measurement protocol and an independent receiver receipt. Add a debrief/LLM by consuming exported events outside the alert path.
+
+Every one of these choices is revisable. Keep migrations explicit and preserve regression vectors when a protocol changes.

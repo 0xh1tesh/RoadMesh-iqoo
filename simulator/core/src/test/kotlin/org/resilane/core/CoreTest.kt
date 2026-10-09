@@ -176,7 +176,10 @@ class ProtocolTest {
         assertTrue(d.firstSeen(1, 12)); assertTrue(d.firstSeen(1, 11)); assertFalse(d.firstSeen(1, 11))
         assertTrue(d.firstSeen(2, 10))
         assertTrue(d.firstSeen(1, 200)); assertFalse(d.firstSeen(1, 200))
-        assertTrue(d.firstSeen(1, 1)) // restarted peer
+        assertFalse(d.firstSeen(1, 1)) // old messages cannot reset a session
+        assertFalse(d.firstSeen(1, 200))
+        assertTrue(d.firstSeen(1, 1, sessionId = 42))
+        assertFalse(d.firstSeen(1, 200, sessionId = 0)) // retired session
     }
 }
 

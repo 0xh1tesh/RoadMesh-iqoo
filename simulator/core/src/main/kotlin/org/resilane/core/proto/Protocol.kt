@@ -18,8 +18,8 @@ import java.nio.ByteOrder
  */
 object Protocol {
     const val MAGIC: Short = 0x4C52 // "RL" little-endian
-    const val VERSION: Byte = 1
-    const val HEADER_BYTES = 18
+    const val VERSION: Byte = 2
+    const val HEADER_BYTES = 26
     const val MAX_BYTES = 1024
 }
 
@@ -39,6 +39,7 @@ data class Envelope(
     val msgSeq: Int,
     val ttl: Int,
     val body: Message,
+    val sessionId: Long = 0,
 )
 
 sealed interface Message {
@@ -92,6 +93,7 @@ object Codec {
         val b = ByteBuffer.allocate(Protocol.MAX_BYTES).order(ByteOrder.LITTLE_ENDIAN)
         b.putShort(Protocol.MAGIC).put(Protocol.VERSION).put(e.body.type.code)
         b.put(e.ttl.coerceIn(0, 255).toByte()).put(0).putLong(e.origin).putInt(e.msgSeq)
+        b.putLong(e.sessionId)
         when (val m = e.body) {
             is Hello -> {
                 putStr(b, m.name, 32); b.put(m.modelId.toByte()); b.putInt(m.colorArgb)
@@ -112,16 +114,20 @@ object Codec {
         return b.array().copyOf(b.position())
     }
 
-    /** Null for anything that is not a well-formed v1 ResiLane message; never throws. */
-    fun decode(bytes: ByteArray, len: Int = bytes.size): Envelope? = try {
+    /** Accepts v2 session-aware frames and legacy v1 scene frames; never throws. */
+    fun decode(bytes: ByteArray, len: Int = bytes.size): Envelope? { return try {
+        if (len !in 0..bytes.size || len > Protocol.MAX_BYTES) return null
         val b = ByteBuffer.wrap(bytes, 0, len).order(ByteOrder.LITTLE_ENDIAN)
-        if (len < Protocol.HEADER_BYTES || b.short != Protocol.MAGIC || b.get() != Protocol.VERSION) null
+        if (len < 18 || b.short != Protocol.MAGIC) null
         else {
+            val version = b.get()
+            if (version != Protocol.VERSION && version != 1.toByte()) return null
             val type = MsgType.of(b.get())
             val ttl = b.get().toInt() and 0xFF
             b.get() // flags, reserved
             val origin = b.long
             val seq = b.int
+            val session = if (version == Protocol.VERSION) b.long else 0L
             val body: Message? = when (type) {
                 MsgType.HELLO -> Hello(getStr(b), b.get().toInt() and 0xFF, b.int, b.float, b.float, getStr(b))
                 MsgType.POSE -> PoseMsg(
@@ -136,12 +142,13 @@ object Codec {
                 MsgType.BYE -> Bye
                 null -> null
             }
-            body?.let { Envelope(origin, seq, ttl, it) }
+            body?.takeIf { !b.hasRemaining() }?.let { Envelope(origin, seq, ttl, it, session) }
         }
     } catch (_: BufferUnderflowException) {
         null
     } catch (_: IllegalArgumentException) {
         null
+    }
     }
 
     private fun putStr(b: ByteBuffer, s: String, max: Int) {
@@ -162,22 +169,30 @@ object Codec {
  * Per-origin replay window (like IPsec anti-replay): accepts each (origin, msgSeq) once even when
  * the same message arrives over two transports or via a relay, and tolerates reordering within 64.
  */
-class DedupeWindow {
-    private class W(var top: Int, var bits: Long)
-    private val windows = HashMap<Long, W>()
+class DedupeWindow(private val capacity: Int = 1024) {
+    private class W(var session: Long, var top: Int, var bits: Long, val retired: MutableSet<Long> = linkedSetOf())
+    private val windows = LinkedHashMap<Long, W>()
 
     @Synchronized
-    fun firstSeen(origin: Long, seq: Int): Boolean {
-        val w = windows[origin] ?: run { windows[origin] = W(seq, 1L); return true }
-        val d = seq - w.top
+    fun firstSeen(origin: Long, seq: Int, sessionId: Long = 0): Boolean {
+        val w = windows[origin] ?: run {
+            if (windows.size >= capacity) return false
+            windows[origin] = W(sessionId, seq, 1L); return true
+        }
+        if (sessionId != w.session) {
+            if (sessionId in w.retired || w.retired.size >= 16) return false
+            w.retired += w.session
+            w.session = sessionId; w.top = seq; w.bits = 1L
+            return true
+        }
+        val d = seq.toLong() - w.top.toLong()
         return when {
-            d > 0 -> { w.bits = if (d >= 64) 1L else (w.bits shl d) or 1L; w.top = seq; true }
+            d > 0 -> { w.bits = if (d >= 64) 1L else (w.bits shl d.toInt()) or 1L; w.top = seq; true }
             d > -64 -> {
-                val mask = 1L shl (-d)
+                val mask = 1L shl (-d).toInt()
                 if (w.bits and mask != 0L) false else { w.bits = w.bits or mask; true }
             }
-            // Far behind: most likely the peer restarted and its counter reset. Start over.
-            else -> { w.top = seq; w.bits = 1L; true }
+            else -> false
         }
     }
 

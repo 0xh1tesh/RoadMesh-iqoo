@@ -12,8 +12,10 @@ android {
         applicationId = "com.jsons.roadmesh"
         minSdk = 31
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.0.1"
+        versionCode = 2
+        versionName = "0.1.0"
+        // Loaners are arm64; override for future targets or an emulator without changing source.
+        ndk { abiFilters += providers.gradleProperty("roadmeshAbis").orElse("arm64-v8a").get().split(',').map { it.trim() } }
     }
 
     buildTypes {
@@ -34,6 +36,8 @@ android {
 }
 
 dependencies {
+    implementation(project(":core"))
+    implementation(project(":scene"))
     implementation(platform("androidx.compose:compose-bom:2026.02.01"))
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui")
@@ -41,4 +45,5 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }

@@ -19,6 +19,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -36,12 +37,15 @@ import com.jsons.roadmesh.radio.BleProbe
 /** The first-hour probe screen: reads what this phone can do and exports it as JSON. */
 @SuppressLint("BatteryLife")
 @Composable
-fun SetupCheckScreen() {
+fun SetupCheckScreen(canProbeRadio: Boolean = true) {
     val context = LocalContext.current
     var staticProbes by remember { mutableStateOf(DeviceProbe.readStatic(context)) }
     var ttsProbes by remember { mutableStateOf<List<Probe>>(emptyList()) }
     var advProbe by remember { mutableStateOf<Probe?>(null) }
     var status by remember { mutableStateOf("ready") }
+    var probing by remember { mutableStateOf(false) }
+    var cancelProbe by remember { mutableStateOf<(() -> Unit)?>(null) }
+    DisposableEffect(Unit) { onDispose { cancelProbe?.invoke() } }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -64,12 +68,14 @@ fun SetupCheckScreen() {
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Button(onClick = { permissionLauncher.launch(REQUIRED_PERMISSIONS) }) { Text("Permissions", fontSize = 12.sp) }
             Button(onClick = {
+                probing = true
                 status = "counting advertising sets..."
-                BleProbe.countAdvertisingSets(context) { count, note ->
-                    advProbe = Probe("BLE advertising sets at once", "$count ($note)", count >= 3)
+                cancelProbe = BleProbe.countAdvertisingSets(context) { count, note ->
+                    probing = false
+                    advProbe = Probe("BLE advertising sets at once", "$count ($note)", count >= 1)
                     status = "advertising sets: $count"
                 }
-            }) { Text("Count adv sets", fontSize = 12.sp) }
+            }, enabled = canProbeRadio && !probing) { Text("Count adv sets", fontSize = 12.sp) }
             Button(onClick = {
                 staticProbes = DeviceProbe.readStatic(context)
                 DeviceProbe.readTts(context) { ttsProbes = it }
@@ -86,6 +92,7 @@ fun SetupCheckScreen() {
             Button(onClick = { status = DeviceProbe.exportJson(context, all) }) { Text("Export JSON", fontSize = 12.sp) }
         }
         Text("status: $status", fontSize = 12.sp)
+        if (!canProbeRadio) Text("Stop the mesh before probing radio capacity. This app uses one advertising set.", fontSize = 12.sp)
         LazyColumn(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             items(all) { p ->
                 val color = when (p.ok) {
