@@ -15,6 +15,3 @@ captures/
 test-data/*.csv
 # Exports
 exports/
-
-# Private research dossier (kept local, not published)
-docs/research/
