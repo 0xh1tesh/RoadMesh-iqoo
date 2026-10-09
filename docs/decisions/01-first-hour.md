@@ -13,7 +13,11 @@ Status key: [x] done · [ ] open · [~] needs the loaner phones
   ```
 - [ ] No Android Studio and no `gradle` command on this laptop. Either install Android Studio, or install Gradle and generate the wrapper. Other teammates: check theirs.
 - [ ] Each teammate: clone this repo, JDK 17, SDK 36, `adb devices` shows their loaner.
-- [~] No phone is connected over adb yet. On the loaner: Settings > About > tap build number 7 times > Developer options > USB debugging; accept the RSA prompt. (Do not change HackTracker or Office Kit settings.)
+- [x] **Decision: no debugging on the loaners** (cannot enable USB or wireless debugging). So:
+  - Develop, run and read logcat on our OWN phones (adb works there). Loaners only get builds that already ran clean on an own phone, because crashes on a loaner show up in HackTracker.
+  - Install on loaners: build the APK, move it with Office Kit file transfer, open it from the phone's file manager. Needs "install unknown apps" for the file manager (not a debugging setting).
+  - Everything adb would show lives in the app: SetupCheck (Build.*, BLE caps, voices), log ring, stats, JSON export via Office Kit, `ApplicationExitInfo`, settings editor on the phone.
+- [ ] **GATE 1: prove the install path.** Move any APK (the skeleton debug build) to a loaner and install it. If blocked, ask the organisers how teams install builds (question 8 below).
 
 ## B. Ask the organisers (the answer goes below each line)
 1. Which Red/Green windows apply? (The booklet shows a boundary at 14:00 on Saturday; the site data said 13:00.)
@@ -23,9 +27,10 @@ Status key: [x] done · [ ] open · [~] needs the loaner phones
 5. Does Office Kit mirroring work without internet? Is the venue Wi-Fi usable?
 6. Where do the cloud AI credits get claimed, and which models are listed?
 7. Will Qualcomm mentors be on the floor, and when is the mentor round?
+8. How should teams install their own APKs on the loaners (unknown sources, an official channel)? Is Developer options available at all?
 
 ## C. Device probes (run on each loaner; record the numbers)
-- [~] About phone: model, Android version, OriginOS version, Bluetooth version
+- [~] (read in-app, no adb) About phone: model, Android version, OriginOS version, Bluetooth version
 - [~] BLE: extended advertising supported, 2M PHY, Coded PHY, max advertising data length, number of advertising sets (create until TOO_MANY_ADVERTISERS)
 - [~] Wi-Fi Aware feature present
 - [~] NPU: build Qualcomm AI Hub `object_detection_android` (YOLOX) unchanged. Record backend (QNN/HTP, GPU, CPU) and ms. Is OpenCL present for the GPU rung?
