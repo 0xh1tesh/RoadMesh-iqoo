@@ -96,13 +96,16 @@ class DriverWatch(private val rules: DriverRules = DriverRules()) {
         if (eyes.isNotEmpty()) window.addLast(s.tS to closed)
         while (window.isNotEmpty() && s.tS - window.first().first > rules.perclosWindowS) window.removeFirst()
         val perclos = window.takeIf { it.size > 1 && it.last().first - it.first().first >= rules.perclosMinS }?.let { w -> w.count { it.second }.toDouble() / w.size }
+        // Within an episode, open eyes and a raised head count as awake even while old closures still fill the window;
+        // the recovery timer in escalate() then decides when the episode ends.
+        val recovered = episode != null && !closed && !dropped
 
         val (level, reason, confidence) = when {
             closedS >= rules.faintClosedS -> Triple(Alertness.UNRESPONSIVE, "eyes shut for ${"%.1f".format(closedS)} s", 0.9)
             droppedS >= rules.headDropS && closedS >= 0.5 -> Triple(Alertness.UNRESPONSIVE, "head dropped ${drop?.roundToInt() ?: 0}° with eyes shut", 0.9)
             droppedS >= rules.headDropS * 2 && eyes.isEmpty() -> Triple(Alertness.UNRESPONSIVE, "head dropped and eyes out of sight for ${"%.1f".format(droppedS)} s", 0.7)
             closedS >= rules.drowsyClosedS -> Triple(Alertness.DROWSY, "eyes shut for ${"%.1f".format(closedS)} s", 0.7)
-            perclos != null && perclos >= rules.perclosDrowsy -> Triple(Alertness.DROWSY, "eyes shut ${(perclos * 100).roundToInt()}% of the last ${rules.perclosWindowS.roundToInt()} s", 0.6)
+            perclos != null && perclos >= rules.perclosDrowsy && !recovered -> Triple(Alertness.DROWSY, "eyes shut ${(perclos * 100).roundToInt()}% of the last ${rules.perclosWindowS.roundToInt()} s", 0.6)
             basePitch == null -> Triple(Alertness.CALIBRATING, null, 0.0)
             else -> Triple(Alertness.AWAKE, null, 0.0)
         }

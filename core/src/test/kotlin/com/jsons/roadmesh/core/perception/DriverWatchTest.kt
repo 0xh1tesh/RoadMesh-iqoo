@@ -77,4 +77,16 @@ class DriverWatchTest {
         assertTrue(w.feed(3.0, 10.0) { FaceSample(it, false) }.isEmpty())
         assertEquals(Alertness.NO_FACE, w.reading.alertness)
     }
+
+    @Test fun aDriverWhoWasShutForSecondsIsRecoveredOnceAwakeForTheRecoveryTime() {
+        val w = DriverWatch()
+        w.awake()
+        w.feed(3.0, 7.0) { face(it, shut) }                    // 7 s shut: the window is now mostly closed
+        assertTrue(w.alarmed)
+        w.feed(10.0, 1.0) { face(it, open) }
+        assertTrue(w.alarmed)                                   // 1 s awake is not yet enough
+        w.feed(11.0, 1.0) { face(it, open) }
+        assertFalse(w.alarmed)                                  // 2 s awake ends the episode although PERCLOS is still high
+        assertEquals(Alertness.AWAKE, w.reading.alertness)
+    }
 }
