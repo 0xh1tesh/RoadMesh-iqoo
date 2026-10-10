@@ -39,6 +39,7 @@ class MeshEngine(
     private val seen = LinkedHashMap<MessageId, Seen>()
     private val neighbors = LinkedHashMap<NodeId, Neighbor>()
     private val originRates = LinkedHashMap<NodeId, Neighbor>()
+    private val spoken = LinkedHashMap<NodeId, Long>()
     private val pending = LinkedHashMap<MessageId, Pending>()
     private var sequence = 0
     private var rateWindow = Long.MIN_VALUE
@@ -118,7 +119,8 @@ class MeshEngine(
         if (seen.size >= profile.dedupCapacity) return drop("dedup_full")
         seen[e.id] = Seen(now + profile.dedupRetentionMs)
         val effects = mutableListOf<MeshEffect>(MeshEffect.Received(e))
-        if (announce && kind.use == HazardUse.CAUTION && own != null && distance != null && relevant(own, remote, distance)) {
+        if (announce && kind.use == HazardUse.CAUTION && own != null && distance != null && relevant(kind, own, remote, distance) &&
+            !alreadySpoken(kind, e.id.origin, now)) {
             // This base has one trust tier: caution. Forwarders never create independent evidence.
             effects += MeshEffect.Announce(e, kind, distance.roundToInt())
         }
@@ -159,18 +161,40 @@ class MeshEngine(
         seen.entries.removeAll { it.value.until <= now }
         neighbors.entries.removeAll { now - it.value.last > profile.neighborRetentionMs }
         originRates.entries.removeAll { now - it.value.last > profile.neighborRetentionMs }
+        spoken.entries.removeAll { now - it.value >= SOS_SPEECH_GAP_MS }
     }
-    private fun relevant(own: GeoFix, remote: GeoFix, distance: Double): Boolean {
+    private fun relevant(kind: HazardKind, own: GeoFix, remote: GeoFix, distance: Double): Boolean {
         val heading = own.heading ?: return false
         val theirs = remote.heading ?: return false
-        return distance <= profile.relevanceM && angleDifference(heading, theirs) <= 45 &&
-            (distance < 5 || angleDifference(heading, bearing(own, remote)) <= 30)
+        if (distance <= profile.relevanceM && angleDifference(heading, theirs) <= 45 &&
+            (distance < 5 || angleDifference(heading, bearing(own, remote)) <= 30)) return true
+        return kind == HazardKind.DRIVER_SOS && oncoming(own, heading, remote, theirs, distance)
+    }
+    /**
+     * A drowsy driver can drift across the road, so an SOS also matters to a vehicle coming the other way: the sender is
+     * ahead of this phone and heading back towards it, closer than [ONCOMING_M]. Lane membership is not known.
+     */
+    private fun oncoming(own: GeoFix, heading: Double, remote: GeoFix, theirs: Double, distance: Double) =
+        distance <= ONCOMING_M && angleDifference(heading, theirs) >= 135 &&
+            angleDifference(heading, bearing(own, remote)) <= 30 && angleDifference(theirs, bearing(remote, own)) <= 30
+    /** A sustained SOS is a beacon every couple of seconds; speak it once, and again only after a long gap. */
+    private fun alreadySpoken(kind: HazardKind, origin: NodeId, now: Long): Boolean {
+        if (kind != HazardKind.DRIVER_SOS) return false
+        val last = spoken[origin]
+        if (last != null && now - last < SOS_SPEECH_GAP_MS) return true
+        if (spoken.size >= profile.neighborCapacity) spoken.remove(spoken.keys.first())
+        spoken[origin] = now
+        return false
     }
     private fun fix(p: Packet) = GeoFix(p.latE7 / 1e7, p.lonE7 / 1e7,
         if (p.flags and PacketFlags.NO_HEADING != 0) null else p.headingQ * 360.0 / 256,
         if (p.speedCms == Packet.SPEED_UNKNOWN) null else p.speedCms / 100.0, p.flags and PacketFlags.SYNTH_POS != 0)
     private fun drop(reason: String) = listOf(MeshEffect.Notice(reason))
 }
+
+/** How far away an oncoming driver SOS still matters, and how long one sender's SOS stays quiet after being spoken. */
+private const val ONCOMING_M = 300.0
+private const val SOS_SPEECH_GAP_MS = 30_000L
 
 /** Nearest-hour reconstruction is a freshness check with 100ms resolution, never a latency metric. */
 fun generationAgeMs(tGenDeci: Int, utcMs: Long): Long {

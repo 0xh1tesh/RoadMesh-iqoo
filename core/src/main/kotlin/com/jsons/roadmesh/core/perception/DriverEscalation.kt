@@ -66,6 +66,9 @@ class DriverEscalation(private val rules: EscalationRules = EscalationRules()) {
         }
     }
 
+    /** Seconds until the SOS goes out if the driver does not answer, null when no window is open. */
+    fun remainingS(tS: Double): Double? = if (state == EscalationState.ALERTING) (windowEndS - tS).coerceAtLeast(0.0) else null
+
     /** The driver answered on purpose: a tap or a volume key. */
     fun acknowledge(): List<EscalationAction> = end()
 

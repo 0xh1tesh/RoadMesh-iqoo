@@ -80,6 +80,22 @@ class RoadMap(private val mergeM: Double = 25.0, private val capacity: Int = 256
         return merged
     }
 
+    /**
+     * The driver behind [HazardKind.DRIVER_OK] is awake again: forget every [HazardKind.DRIVER_SOS] that [reporter] sent.
+     * Only that sender's own evidence goes; an SOS another phone reported about the same place stays until it expires.
+     */
+    fun cancel(reporter: NodeId, nowMs: Long) {
+        expire(nowMs)
+        for (i in items.indices.reversed()) {
+            val h = items[i]
+            if (h.kind != HazardKind.DRIVER_SOS) continue
+            if (h.evidence.isEmpty()) { if (reporter in h.reporters && h.reporters.size == 1) items.removeAt(i); continue }
+            val support = h.evidence.filter { it.id.origin != reporter }
+            if (support.isEmpty()) items.removeAt(i)
+            else items[i] = h.copy(evidence = support, reporters = support.map { it.id.origin }.toSet())
+        }
+    }
+
     /** True when this hazard is new or was last seen more than [quietMs] ago, so speaking it again is worth it. */
     fun fresh(kind: HazardKind, at: GeoFix, nowMs: Long, quietMs: Long): Boolean =
         items.none { it.kind == kind && distanceM(it.fix, at) <= mergeM && nowMs - it.lastSeenMs < quietMs }

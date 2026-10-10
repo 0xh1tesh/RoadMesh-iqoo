@@ -7,14 +7,18 @@ data class MessageId(val origin: NodeId, val session: Long, val sequence: Int)
 enum class Provenance(val wire: Int) { DEMO(1), LIVE(2), REPLAY(3) }
 enum class Role(val title: String, val stageId: Long) { OBSERVER("Observer", 1), RELAY("Relay", 2), RECEIVER("Receiver", 3) }
 enum class Mode { STAGE, ROAD }
-/** What a report is for. CAUTION is spoken to drivers behind; REPORT is logged and shared for the authorities. */
-enum class HazardUse { CAUTION, REPORT }
+/**
+ * What a report is for. CAUTION is spoken to drivers behind; REPORT is logged and shared for the authorities; CANCEL
+ * withdraws an earlier caution from the same sender and is never spoken.
+ */
+enum class HazardUse { CAUTION, REPORT, CANCEL }
 
 /**
  * Hazard kinds on air. Cause codes follow ETSI DENM where one exists (2 accident, 9 surface condition, 1 traffic
  * condition, 14 wrong-way driving, 12 people on the road, 27 end of queue, 97 collision risk, 93 human problem for a
- * driver the front camera saw falling asleep or passing out). Violations have no DENM
- * cause; they use the private cause 200. [lifetimeS] is how long a node keeps the report on its road map.
+ * driver whose front camera shows drowsiness). Violations have no DENM
+ * cause; they use the private cause 200. DRIVER_OK is a private sub-cause of 93: the same sender saying the driver is
+ * awake again. [lifetimeS] is how long a node keeps the report on its road map.
  */
 enum class HazardKind(val cause: Int, val subCause: Int, val speech: String, val use: HazardUse, val lifetimeS: Int) {
     BRAKING(27, 1, "Caution. Braking ahead.", HazardUse.CAUTION, 90),
@@ -24,12 +28,14 @@ enum class HazardKind(val cause: Int, val subCause: Int, val speech: String, val
     ACCIDENT(2, 0, "Caution. Accident ahead.", HazardUse.CAUTION, 1_200),
     SLOWDOWN(1, 0, "Caution. Traffic slowing ahead.", HazardUse.CAUTION, 120),
     WRONG_WAY(14, 0, "Caution. Vehicle on the wrong side ahead.", HazardUse.CAUTION, 120),
-    DRIVER_SOS(93, 0, "Emergency. A driver ahead may be asleep or unconscious. Slow down and keep clear.", HazardUse.CAUTION, 300),
+    // Sent again every 2 s while it lasts, so 10 s without a beacon means it is over.
+    DRIVER_SOS(93, 0, "Caution. A driver ahead may be drowsy. Keep your distance.", HazardUse.CAUTION, 10),
     TRIPLE_RIDING(200, 1, "Violation logged. Triple riding.", HazardUse.REPORT, 600),
     NO_HELMET(200, 2, "Violation logged. Rider without a helmet.", HazardUse.REPORT, 600),
     RED_LIGHT(200, 3, "Violation logged. Red light jumped.", HazardUse.REPORT, 600),
     // App-specific manual observation. Append to preserve existing control-record ordinal codes.
-    ROAD_NARROWED(201, 0, "Caution. Road narrowed ahead. Watch for opposing traffic.", HazardUse.CAUTION, 120);
+    ROAD_NARROWED(201, 0, "Caution. Road narrowed ahead. Watch for opposing traffic.", HazardUse.CAUTION, 120),
+    DRIVER_OK(93, 100, "", HazardUse.CANCEL, 10);
 
     val violation get() = cause == 200
     companion object { fun from(cause: Int, sub: Int) = entries.find { it.cause == cause && it.subCause == sub } }

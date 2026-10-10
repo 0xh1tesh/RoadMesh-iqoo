@@ -6,17 +6,19 @@ import kotlin.math.roundToInt
 /**
  * One front-camera reading of the driver's face at [tS] seconds. Eye-open probabilities are 0..1, null when the face
  * detector could not tell. Angles are degrees from the camera's view: pitch is positive with the chin up, roll positive
- * with the head tilted towards the right shoulder.
+ * with the head tilted towards the right shoulder. [jawOpen] is 0..1 (0 closed mouth), null when the model does not give it.
  */
 data class FaceSample(val tS: Double, val face: Boolean, val leftEyeOpen: Float? = null, val rightEyeOpen: Float? = null,
-                      val pitchDeg: Float = 0f, val rollDeg: Float = 0f)
+                      val pitchDeg: Float = 0f, val rollDeg: Float = 0f, val jawOpen: Float? = null)
 
 /** How the driver looks right now, worst last. */
 enum class Alertness { NO_FACE, CALIBRATING, AWAKE, DROWSY, UNRESPONSIVE }
 
 /** The live picture for the screen: eyes shut for [eyesClosedS], [perclos] the share of the recent window with eyes shut. */
 data class DriverReading(val alertness: Alertness = Alertness.NO_FACE, val eyesClosedS: Double = 0.0, val perclos: Double? = null,
-                         val headDropDeg: Float? = null, val reason: String? = null)
+                         val headDropDeg: Float? = null, val reason: String? = null,
+                         /** Yawns in the last [DriverRules.yawnWindowS]. An early sign shown to the driver; it does not raise an alarm. */
+                         val yawns: Int = 0)
 
 /** Raised once when a driver turns drowsy, and again if it gets worse (unresponsive). Each one warns and sends an SOS. */
 data class DriverAlarm(val level: Alertness, val atS: Double, val reason: String, val confidence: Double)
@@ -48,6 +50,10 @@ data class DriverRules(
     val calibrateS: Double = 2.0,
     /** Eyes open and head up this long ends an episode. */
     val recoverS: Double = 1.5,
+    /** A mouth open this wide for this long is a yawn (talking and laughing open and close faster). */
+    val yawnJawOpen: Float = 0.6f,
+    val yawnS: Double = 1.5,
+    val yawnWindowS: Double = 300.0,
 )
 
 /**
@@ -70,12 +76,22 @@ class DriverWatch(private val rules: DriverRules = DriverRules()) {
     private var awakeSince: Double? = null
     private var episode: Alertness? = null
     private val window = ArrayDeque<Pair<Double, Boolean>>()
+    private var yawnSince: Double? = null
+    private var yawnCounted = false
+    private val yawnTimes = ArrayDeque<Double>()
     var reading = DriverReading(); private set
 
     fun reset() {
         calibration.clear(); basePitch = null; baseRoll = 0f; closedSince = null; droppedSince = null; lostSince = null
         impairedAtS = null; awakeSince = null; episode = null; window.clear(); reading = DriverReading()
+        yawnSince = null; yawnCounted = false; yawnTimes.clear()
     }
+
+    /**
+     * The driver answered the alarm. The episode ends, but a closure or head drop still in progress keeps its timers, so
+     * a driver who tapped in their sleep is alarmed again on the very next sample.
+     */
+    fun acknowledge() { episode = null; awakeSince = null; window.clear() }
 
     fun update(s: FaceSample): DriverAlarm? {
         if (!s.face) return lost(s.tS)
@@ -109,7 +125,7 @@ class DriverWatch(private val rules: DriverRules = DriverRules()) {
             basePitch == null -> Triple(Alertness.CALIBRATING, null, 0.0)
             else -> Triple(Alertness.AWAKE, null, 0.0)
         }
-        reading = DriverReading(level, closedS, perclos, drop, reason)
+        reading = DriverReading(level, closedS, perclos, drop, reason, yawns(s))
         return escalate(level, s.tS, reason, confidence, awake = !closed && !dropped)
     }
 
@@ -120,12 +136,25 @@ class DriverWatch(private val rules: DriverRules = DriverRules()) {
         val afterImpaired = impairedAtS?.let { since - it <= 1.0 } == true || episode != null
         if (afterImpaired && goneS >= rules.lostAfterS) {
             val reason = "slumped out of view for ${"%.1f".format(goneS)} s after the eyes shut"
-            reading = DriverReading(Alertness.UNRESPONSIVE, 0.0, null, null, reason)
+            reading = DriverReading(Alertness.UNRESPONSIVE, 0.0, null, null, reason, reading.yawns)
             return escalate(Alertness.UNRESPONSIVE, tS, reason, 0.8, awake = false)
         }
-        reading = DriverReading(episode ?: Alertness.NO_FACE, 0.0, null, null, reading.reason.takeIf { episode != null })
+        reading = DriverReading(episode ?: Alertness.NO_FACE, 0.0, null, null, reading.reason.takeIf { episode != null }, reading.yawns)
+        yawnSince = null; yawnCounted = false
         awakeSince = null
         return null
+    }
+
+    /** Counts a yawn once per wide-open mouth held for [DriverRules.yawnS]; returns yawns in the last [DriverRules.yawnWindowS]. */
+    private fun yawns(s: FaceSample): Int {
+        val wide = s.jawOpen != null && s.jawOpen >= rules.yawnJawOpen
+        if (!wide) { yawnSince = null; yawnCounted = false }
+        else {
+            val since = yawnSince ?: s.tS.also { yawnSince = it }
+            if (!yawnCounted && s.tS - since >= rules.yawnS) { yawnCounted = true; yawnTimes.addLast(s.tS) }
+        }
+        while (yawnTimes.isNotEmpty() && s.tS - yawnTimes.first() > rules.yawnWindowS) yawnTimes.removeFirst()
+        return yawnTimes.size
     }
 
     private fun escalate(level: Alertness, tS: Double, reason: String?, confidence: Double, awake: Boolean): DriverAlarm? {

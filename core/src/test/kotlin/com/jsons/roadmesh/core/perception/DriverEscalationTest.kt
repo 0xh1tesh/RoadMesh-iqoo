@@ -141,4 +141,14 @@ class DriverEscalationTest {
         assertEquals(Alertness.UNRESPONSIVE, next.level)
         assertEquals(1, next.sequence)
     }
+
+    @Test fun theCountdownShowsHowLongTheDriverHasLeftToAnswer() {
+        val esc = DriverEscalation()
+        assertNull(esc.remainingS(0.0))
+        esc.onAlarm(DriverAlarm(Alertness.DROWSY, 10.0, "eyes shut for 1.2 s", 0.7), 10.0)
+        assertEquals(6.0, esc.remainingS(10.0)!!, 0.001)
+        assertEquals(2.5, esc.remainingS(13.5)!!, 0.001)
+        esc.tick(16.0, true)
+        assertNull(esc.remainingS(16.0))                            // the SOS is out: no window left
+    }
 }

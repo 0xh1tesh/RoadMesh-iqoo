@@ -89,4 +89,31 @@ class DriverWatchTest {
         assertFalse(w.alarmed)                                  // 2 s awake ends the episode although PERCLOS is still high
         assertEquals(Alertness.AWAKE, w.reading.alertness)
     }
+
+    @Test fun aWideOpenMouthHeldForAMomentIsOneYawnAndTalkingIsNot() {
+        val w = DriverWatch()
+        w.awake()
+        // Talking: the mouth opens wide for 0.5 s at a time, never 1.5 s.
+        w.feed(3.0, 10.0) { t -> FaceSample(t, true, open, open, 0f, 0f, jawOpen = if ((t * 10).toInt() % 20 < 5) 0.8f else 0.1f) }
+        assertEquals(0, w.reading.yawns)
+        // A yawn: mouth wide for 2.5 s. It counts once however long it lasts.
+        w.feed(13.0, 2.5) { t -> FaceSample(t, true, open, open, 0f, 0f, jawOpen = 0.9f) }
+        assertEquals(1, w.reading.yawns)
+        w.feed(15.5, 2.0) { t -> FaceSample(t, true, open, open, 0f, 0f, jawOpen = 0.1f) }
+        w.feed(17.5, 2.0) { t -> FaceSample(t, true, open, open, 0f, 0f, jawOpen = 0.9f) }
+        assertEquals(2, w.reading.yawns)
+        assertFalse(w.alarmed)                                  // a yawn alone never raises an alarm
+        w.feed(19.5, 320.0) { face(it, open) }
+        assertEquals(0, w.reading.yawns)                        // they leave the five minute window
+    }
+
+    @Test fun aDriverWhoTapsInTheirSleepIsAlarmedAgainOnTheNextSample() {
+        val w = DriverWatch()
+        w.awake()
+        assertEquals(1, w.feed(3.0, 2.0) { face(it, shut) }.size)   // drowsy at 4.2
+        w.acknowledge()
+        assertFalse(w.alarmed)
+        val again = w.feed(5.0, 0.2) { face(it, shut) }
+        assertEquals(Alertness.DROWSY, again.first().level)         // eyes never opened, so the closure timer still stands
+    }
 }

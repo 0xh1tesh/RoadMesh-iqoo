@@ -105,7 +105,7 @@ class MeshSession(private val context: Context, val preferences: AppPreferences)
                     expires = now + minOf(profile.maxAgeMs, f.packet.validityS * 1_000L) - age
                     priority = when (f.kind) {
                         HazardKind.BRAKING, HazardKind.VEHICLE_CLOSE, HazardKind.PEDESTRIAN, HazardKind.ACCIDENT -> PriorityOutbox.Priority.URGENT
-                        else -> if (f.kind?.use == HazardUse.CAUTION) PriorityOutbox.Priority.CONDITION else PriorityOutbox.Priority.CONTEXT
+                        else -> if (f.kind?.use == HazardUse.CAUTION || f.kind?.use == HazardUse.CANCEL) PriorityOutbox.Priority.CONDITION else PriorityOutbox.Priority.CONTEXT
                     }
                     key = "event:${f.id}"
                 }
@@ -314,7 +314,8 @@ class MeshSession(private val context: Context, val preferences: AppPreferences)
                 val repeat = kind != null && !map.fresh(kind, at, now, 60_000)
                 val utc = System.currentTimeMillis()
                 val age = generationAgeMs(effect.frame.packet.tGenDeci, utc)
-                if (kind != null && age >= 0) map.add(kind, at, effect.frame.id.origin, now, effect.frame.detail?.confidence, own = false,
+                if (kind?.use == HazardUse.CANCEL) map.cancel(effect.frame.id.origin, now)
+                else if (kind != null && age >= 0) map.add(kind, at, effect.frame.id.origin, now, effect.frame.detail?.confidence, own = false,
                     observationId = effect.frame.id, capturedMs = now - age, capturedUtcMs = utc - age, provenance = effect.frame.provenance)
                 else if (age < 0) count("evidence_future_rejected")
                 update { it.copy(lastReceived = effect.frame, known = map.all) }
