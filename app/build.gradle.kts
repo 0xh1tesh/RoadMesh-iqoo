@@ -57,6 +57,12 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     // On-device LLM (Gemma 2B int4 on CPU) for the co-pilot. The model file is imported at run time, never bundled.
     implementation("com.google.mediapipe:tasks-genai:0.10.32")
+    // Driver monitor: front camera and on-device face detection (eyes open, head pose), bundled model, no network.
+    implementation("androidx.camera:camera-camera2:1.6.2")
+    implementation("androidx.camera:camera-lifecycle:1.6.2")
+    implementation("androidx.camera:camera-view:1.6.2")
+    implementation("androidx.camera:camera-mlkit-vision:1.6.2")
+    implementation("com.google.mlkit:face-detection:16.1.7")
 
     testImplementation("junit:junit:4.13.2")
     // Screen renders on the JVM (Robolectric native graphics + Roborazzi). Only compiled with -PwithScreenshots=true.

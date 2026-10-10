@@ -41,6 +41,7 @@ import com.jsons.roadmesh.copilot.CopilotState
 import com.jsons.roadmesh.core.insight.title
 import com.jsons.roadmesh.core.mesh.*
 import com.jsons.roadmesh.core.perception.ObjectClass
+import com.jsons.roadmesh.perception.DriverMonitor
 import com.jsons.roadmesh.perception.ObserverState
 import com.jsons.roadmesh.perception.Raised
 import com.jsons.roadmesh.service.EventTrace
@@ -212,7 +213,8 @@ enum class Tab(val title: String, val icon: TabIcon) {
         TabColumn {
             HowTo(state)
             if (state.ready && state.liveRole == Role.OBSERVER) TestWarnings(app, state)
-            Heading("Observe the road", "This phone becomes the dashcam and leads the chain. YOLO finds potholes, accidents, people on the road and traffic violations; hazards go to every phone behind, violations go to the report log.")
+            Heading("Observe the road", "This phone becomes the dashcam and leads the chain. YOLO finds potholes, accidents, people on the road and traffic violations; hazards go to every phone behind, violations go to the report log. " +
+                "Or turn it round: the driver monitor watches your face and sends an SOS if you fall asleep or pass out.")
             Surface(shape = RoundedCornerShape(24.dp), color = Tokens.Panel, modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     RoadScene(Modifier.fillMaxWidth().height(170.dp), highlight = state.liveRole.ordinal)
@@ -224,7 +226,8 @@ enum class Tab(val title: String, val icon: TabIcon) {
                             Text(label, fontSize = 14.sp, color = if (on) Tokens.Yellow else Tokens.Secondary, modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
                         }
                     }
-                    PrimaryButton("Play simulation", { app.observer.simulate(true) }, Modifier.fillMaxWidth())
+                    val driver = o.source == DriverMonitor.LABEL
+                    PrimaryButton(if (driver) "Start driver monitor" else "Play simulation", { app.observer.simulate(true) }, Modifier.fillMaxWidth())
                     GhostButton("Choose another video", actions.pickVideo, Modifier.fillMaxWidth())
                 }
             }
@@ -233,6 +236,7 @@ enum class Tab(val title: String, val icon: TabIcon) {
         }
         return
     }
+    if (o.source == DriverMonitor.LABEL) { DriverMonitorView(app); return }
     val recent = o.raised.firstOrNull()?.takeIf { SystemClock.elapsedRealtime() - it.atMs < 3_500 }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val landscape = maxWidth > maxHeight

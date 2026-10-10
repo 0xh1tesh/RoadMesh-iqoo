@@ -122,6 +122,7 @@ class DashcamObserver(private val context: Context, private val mesh: MeshSessio
 
     private fun open() {
         val s = surface ?: return
+        if (asset == DriverMonitor.ASSET && source == null) return
         runCatching {
             MediaPlayer().apply {
                 val uri = source
@@ -241,11 +242,14 @@ class DashcamObserver(private val context: Context, private val mesh: MeshSessio
 
     companion object {
         const val DEFAULT_ASSET = "dashcam/bangalore_cv_raman_road.mp4"
-        /** Clips bundled with the app: asset path to the label shown. The pothole clips are roadside views, not dashcams. */
+        /**
+         * What the Observe tab can run: asset path to the label shown. The pothole clip is a roadside view, not a dashcam.
+         * The last entry is not a clip: it turns on the front camera and watches the driver ([DriverMonitor]).
+         */
         val CLIPS = listOf(
             DEFAULT_ASSET to "C V Raman Road, Bengaluru · dashcam · CC0",
             "dashcam/pothole_traffic_cc-by-sa.mp4" to "Traffic through potholes · roadside · Amuzujoe, CC BY-SA 4.0",
-            "dashcam/pothole_road_cc-by-sa.mp4" to "Rain-filled potholes · roadside · Knowledge and philosophy, CC BY-SA 4.0",
+            DriverMonitor.ASSET to DriverMonitor.LABEL,
         )
         const val DEFAULT_LABEL = "C V Raman Road, Bengaluru · dashcam · CC0"
         const val MODEL_ASSET = "models/yolo11n_384x640.onnx"

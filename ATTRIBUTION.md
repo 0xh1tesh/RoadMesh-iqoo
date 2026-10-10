@@ -18,7 +18,8 @@ Every library, model, dataset and reference used, with its licence. Update in th
 | Kaggle datasets for the road model: `vidishbijalwan/rdd2022-india-pothole-d40` (RDD2022, CC BY-SA 4.0), `anggadwisunarto/potholes-detection-yolov8`, `andrewmvd/pothole-detection`, `andrewmvd/helmet-detection`, `aneesarom/rider-with-helmet-without-helmet-number-plate` | Training data for pothole / helmet / no-helmet (`tools/kaggle/road_yolo`) | Per each dataset page on Kaggle | https://www.kaggle.com/datasets |
 | *C V Raman Road* dashcam clip | Bundled dashcam replay | CC0 | Wikimedia Commons |
 | *Cars Moving into pothole* (Amuzujoe), transcoded to 640x360 | Bundled roadside pothole clip | CC BY-SA 4.0 | https://commons.wikimedia.org/wiki/File:Cars_Moving_into_pothole.webm |
-| *Rainwater-Filled Potholes on a Community Road* (Knowledge and philosophy), transcoded to 640x360 | Bundled roadside pothole clip | CC BY-SA 4.0 | https://commons.wikimedia.org/wiki/File:Rainwater-Filled_Potholes_on_a_Community_Road.webm |
+| CameraX 1.6.2 (`camera-camera2`, `camera-lifecycle`, `camera-view`, `camera-mlkit-vision`) | Driver monitor: front camera preview and frame analysis | Apache-2.0 | https://developer.android.com/jetpack/androidx/releases/camera |
+| ML Kit Face Detection, bundled model `com.google.mlkit:face-detection` 16.1.7 | Driver monitor: on-device face, eye-open and head-pose estimates | ML Kit Terms of Service | https://developers.google.com/ml-kit/terms |
 | ONNX Runtime JVM 1.20.0 (opt-in test dependency) | Optional model evaluation on laptop | MIT | https://github.com/microsoft/onnxruntime |
 | AndroidX core, activity, lifecycle | simulator/: app framework | Apache-2.0 | https://developer.android.com/jetpack/androidx |
 | Ultralytics YOLO11n weights (not committed; `simulator/tools/fetch_model.py`) | simulator/: car detector scored against simulator ground truth | AGPL-3.0 (enterprise licence otherwise) | https://github.com/ultralytics/ultralytics |

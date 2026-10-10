@@ -88,6 +88,7 @@ data class RoadPicture(val peers: List<PicturePeer>, val items: List<PictureItem
                     HazardKind.WRONG_WAY -> "A vehicle is on the wrong side ${n.aheadM} m ahead$when_: keep left and be ready to stop."
                     HazardKind.PEDESTRIAN -> "Someone is on the road ${n.aheadM} m ahead$when_: slow down."
                     HazardKind.BRAKING -> "Traffic is braking ${n.aheadM} m ahead$when_: ease off early."
+                    HazardKind.DRIVER_SOS -> "A driver ${n.aheadM} m ahead$when_ may be asleep or unconscious: slow down and keep clear."
                     else -> "${n.kind.title()} ${n.aheadM} m ahead$when_."
                 }
             }

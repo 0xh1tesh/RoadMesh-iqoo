@@ -84,7 +84,7 @@ private class Camera(val yaw: Double, val pitch: Double, val distance: Double, v
 private fun roleColour(role: Role) = when (role) { Role.OBSERVER -> roleColor(0); Role.RELAY -> roleColor(1); Role.RECEIVER -> roleColor(2) }
 private fun hazardColour(kind: HazardKind) = when {
     kind.violation -> Tokens.Purple
-    kind == HazardKind.ACCIDENT || kind == HazardKind.WRONG_WAY -> Tokens.Red
+    kind == HazardKind.ACCIDENT || kind == HazardKind.WRONG_WAY || kind == HazardKind.DRIVER_SOS -> Tokens.Red
     else -> Tokens.Yellow
 }
 

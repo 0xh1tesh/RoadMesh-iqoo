@@ -12,7 +12,8 @@ enum class HazardUse { CAUTION, REPORT }
 
 /**
  * Hazard kinds on air. Cause codes follow ETSI DENM where one exists (2 accident, 9 surface condition, 1 traffic
- * condition, 14 wrong-way driving, 12 people on the road, 27 end of queue, 97 collision risk). Violations have no DENM
+ * condition, 14 wrong-way driving, 12 people on the road, 27 end of queue, 97 collision risk, 93 human problem for a
+ * driver the front camera saw falling asleep or passing out). Violations have no DENM
  * cause; they use the private cause 200. [lifetimeS] is how long a node keeps the report on its road map.
  */
 enum class HazardKind(val cause: Int, val subCause: Int, val speech: String, val use: HazardUse, val lifetimeS: Int) {
@@ -23,6 +24,7 @@ enum class HazardKind(val cause: Int, val subCause: Int, val speech: String, val
     ACCIDENT(2, 0, "Caution. Accident ahead.", HazardUse.CAUTION, 1_200),
     SLOWDOWN(1, 0, "Caution. Traffic slowing ahead.", HazardUse.CAUTION, 120),
     WRONG_WAY(14, 0, "Caution. Vehicle on the wrong side ahead.", HazardUse.CAUTION, 120),
+    DRIVER_SOS(93, 0, "Emergency. A driver ahead may be asleep or unconscious. Slow down and keep clear.", HazardUse.CAUTION, 300),
     TRIPLE_RIDING(200, 1, "Violation logged. Triple riding.", HazardUse.REPORT, 600),
     NO_HELMET(200, 2, "Violation logged. Rider without a helmet.", HazardUse.REPORT, 600),
     RED_LIGHT(200, 3, "Violation logged. Red light jumped.", HazardUse.REPORT, 600);

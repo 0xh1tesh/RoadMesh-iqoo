@@ -35,6 +35,7 @@ data class NodeInference(val kind: HazardKind, val hazardAheadM: Int, val etaS: 
                 HazardKind.ACCIDENT -> if (soon) "slow down now, a lane may be blocked and people may be on the road" else "slow down early and be ready to change lanes"
                 HazardKind.SLOWDOWN -> if (soon) "ease off now so you reach the queue after it moves" else "ease off early; a slowdown is moving back toward you"
                 HazardKind.WRONG_WAY -> if (soon) "keep left and be ready to stop, a vehicle is coming the wrong way" else "keep left; a vehicle is on the wrong side ahead"
+                HazardKind.DRIVER_SOS -> if (soon) "slow down now and keep clear, that driver may drift or stop suddenly; stop to help only if it is safe" else "slow down early; a driver ahead may be asleep or unconscious"
                 HazardKind.TRIPLE_RIDING, HazardKind.NO_HELMET, HazardKind.RED_LIGHT -> "no action needed; it was logged for the traffic police"
             }
             return NodeInference(kind, ahead, eta, action, detail)
@@ -50,6 +51,7 @@ fun HazardKind.title() = when (this) {
     HazardKind.ACCIDENT -> "Accident"
     HazardKind.SLOWDOWN -> "Traffic slowdown"
     HazardKind.WRONG_WAY -> "Wrong-side vehicle"
+    HazardKind.DRIVER_SOS -> "Driver SOS"
     HazardKind.TRIPLE_RIDING -> "Triple riding"
     HazardKind.NO_HELMET -> "Rider without helmet"
     HazardKind.RED_LIGHT -> "Red light jumped"

@@ -28,6 +28,7 @@ class RoadMeshApplication : Application() {
     val reports by lazy { ReportLog(this) }
     val observer by lazy { DashcamObserver(this, session, copilot, preferences, reports) }
     val crash by lazy { CrashDetector(this, session, reports, preferences) }
+    val driver by lazy { com.jsons.roadmesh.perception.DriverMonitor(this, session, reports, preferences) }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val asked = MutableStateFlow<List<Question>>(emptyList())
     val questions = asked.asStateFlow()

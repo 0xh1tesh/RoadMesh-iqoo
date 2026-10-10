@@ -25,7 +25,9 @@ import com.jsons.roadmesh.copilot.CopilotState
 import com.jsons.roadmesh.core.insight.NodeInference
 import com.jsons.roadmesh.core.mesh.*
 import com.jsons.roadmesh.core.perception.*
+import com.jsons.roadmesh.perception.DriverState
 import com.jsons.roadmesh.perception.ObserverState
+import com.jsons.roadmesh.perception.SosSent
 import com.jsons.roadmesh.perception.Overlay
 import com.jsons.roadmesh.perception.Raised
 import com.jsons.roadmesh.service.EventTrace
@@ -154,5 +156,25 @@ class ScreenshotTest {
         app.reports.add(HazardKind.ACCIDENT, "reported over the mesh by phone A", null, null, null, true, null, false, "mesh", fromMesh = true)
         compose.setContent { RoadMeshTheme { Surface(color = Tokens.Ink) { ReportsTab(app, app.reports.flow.value) } } }
         shot("8-reports")
+    }
+
+    private fun drowsy(): DriverState {
+        val alarm = DriverAlarm(Alertness.DROWSY, 12.4, "eyes shut for 1.4 s", 0.7)
+        return DriverState(running = true, reading = DriverReading(Alertness.DROWSY, 1.4, 0.18, 2f, alarm.reason), leftEyeOpen = 0.04f, rightEyeOpen = 0.06f,
+            fps = 14.0, alarm = alarm, sos = listOf(SosSent(alarm, true, now - 3_000)))
+    }
+
+    @Test fun driverMonitorPanel() {
+        compose.setContent { RoadMeshTheme { Surface(color = Tokens.Ink) {
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) { DriverPanel(app, drowsy()) }
+        } } }
+        shot("driver_panel")
+    }
+
+    @Test fun driverWakeUpAlarm() {
+        val d = drowsy()
+        compose.setContent { RoadMeshTheme { WakeUpContent(d.copy(alarm = d.alarm!!.copy(level = Alertness.UNRESPONSIVE, reason = "eyes shut for 3.0 s"),
+            sos = listOf(SosSent(d.alarm!!.copy(level = Alertness.UNRESPONSIVE, reason = "eyes shut for 3.0 s"), true, now))), {}) } }
+        shot("driver_wake_up")
     }
 }
