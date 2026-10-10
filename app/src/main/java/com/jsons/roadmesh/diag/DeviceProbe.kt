@@ -6,6 +6,8 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.hardware.Sensor
 import android.hardware.SensorManager
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
 import android.net.wifi.aware.WifiAwareManager
 import android.os.Build
 import android.os.Environment
@@ -41,6 +43,7 @@ object DeviceProbe {
         out += bluetooth(context)
         out += wifiAware(context)
         out += features(context)
+        out += cameras(context)
         out += sensors(context)
         out += battery(context)
         out += permissions(context)
@@ -103,6 +106,24 @@ object DeviceProbe {
             "Barometer" to PackageManager.FEATURE_SENSOR_BAROMETER,
         )
         return wanted.map { (label, feature) -> pm.hasSystemFeature(feature).let { Probe("Feature $label", it.toString(), it) } }
+    }
+
+    /**
+     * Whether a front and a back camera can stream at once, which decides if the driver monitor can run beside the dashcam
+     * on one phone. Information only: both outcomes have a plan (see docs/drowsiness-sos-fog-plan.md, section 2.2).
+     */
+    private fun cameras(context: Context): List<Probe> {
+        val manager = context.getSystemService(CameraManager::class.java) ?: return listOf(Probe("Camera manager", "none", false))
+        fun facing(id: String) = runCatching { manager.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING) }.getOrNull()
+        val ids = runCatching { manager.cameraIdList.toList() }.getOrDefault(emptyList())
+        val front = ids.count { facing(it) == CameraCharacteristics.LENS_FACING_FRONT }
+        val back = ids.count { facing(it) == CameraCharacteristics.LENS_FACING_BACK }
+        val groups = runCatching { manager.concurrentCameraIds }.getOrDefault(emptySet())
+        val frontAndBack = groups.any { g -> g.any { facing(it) == CameraCharacteristics.LENS_FACING_FRONT } && g.any { facing(it) == CameraCharacteristics.LENS_FACING_BACK } }
+        return listOf(
+            Probe("Cameras", "$front front, $back back"),
+            Probe("Front and back camera at once", if (frontAndBack) "supported" else "not supported", frontAndBack),
+        )
     }
 
     private fun sensors(context: Context): List<Probe> {
