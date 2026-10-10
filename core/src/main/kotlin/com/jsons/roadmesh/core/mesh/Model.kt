@@ -7,10 +7,27 @@ data class MessageId(val origin: NodeId, val session: Long, val sequence: Int)
 enum class Provenance(val wire: Int) { DEMO(1), LIVE(2), REPLAY(3) }
 enum class Role(val title: String, val stageId: Long) { OBSERVER("Observer", 1), RELAY("Relay", 2), RECEIVER("Receiver", 3) }
 enum class Mode { STAGE, ROAD }
-enum class HazardKind(val cause: Int, val subCause: Int, val speech: String) {
-    BRAKING(27, 1, "Caution. Braking ahead."),
-    PEDESTRIAN(12, 0, "Caution. Pedestrian ahead."),
-    VEHICLE_CLOSE(97, 0, "Caution. Vehicle close ahead.");
+/** What a report is for. CAUTION is spoken to drivers behind; REPORT is logged and shared for the authorities. */
+enum class HazardUse { CAUTION, REPORT }
+
+/**
+ * Hazard kinds on air. Cause codes follow ETSI DENM where one exists (2 accident, 9 surface condition, 1 traffic
+ * condition, 14 wrong-way driving, 12 people on the road, 27 end of queue, 97 collision risk). Violations have no DENM
+ * cause; they use the private cause 200. [lifetimeS] is how long a node keeps the report on its road map.
+ */
+enum class HazardKind(val cause: Int, val subCause: Int, val speech: String, val use: HazardUse, val lifetimeS: Int) {
+    BRAKING(27, 1, "Caution. Braking ahead.", HazardUse.CAUTION, 90),
+    PEDESTRIAN(12, 0, "Caution. Pedestrian ahead.", HazardUse.CAUTION, 30),
+    VEHICLE_CLOSE(97, 0, "Caution. Vehicle close ahead.", HazardUse.CAUTION, 20),
+    POTHOLE(9, 0, "Caution. Pothole ahead.", HazardUse.CAUTION, 1_800),
+    ACCIDENT(2, 0, "Caution. Accident ahead.", HazardUse.CAUTION, 1_200),
+    SLOWDOWN(1, 0, "Caution. Traffic slowing ahead.", HazardUse.CAUTION, 120),
+    WRONG_WAY(14, 0, "Caution. Vehicle on the wrong side ahead.", HazardUse.CAUTION, 120),
+    TRIPLE_RIDING(200, 1, "Violation logged. Triple riding.", HazardUse.REPORT, 600),
+    NO_HELMET(200, 2, "Violation logged. Rider without a helmet.", HazardUse.REPORT, 600),
+    RED_LIGHT(200, 3, "Violation logged. Red light jumped.", HazardUse.REPORT, 600);
+
+    val violation get() = cause == 200
     companion object { fun from(cause: Int, sub: Int) = entries.find { it.cause == cause && it.subCause == sub } }
 }
 data class GeoFix(val lat: Double, val lon: Double, val heading: Double?, val speedMps: Double?, val synthetic: Boolean) {
@@ -48,7 +65,8 @@ interface MeshClock { fun monotonicMs(): Long; fun utcMs(): Long }
 /** A starting operating envelope. Tune it from measured neighborhood density, not total fleet size. */
 data class MeshProfile(
     val mode: Mode = Mode.STAGE,
-    val initialTtl: Int = if (mode == Mode.STAGE) 1 else 2,
+    /** Relays a warning may still take. A chain of n phones needs n - 1. */
+    val initialTtl: Int = if (mode == Mode.STAGE) 8 else 4,
     val maxAgeMs: Long = 5_000,
     val futureToleranceMs: Long = 2_000,
     val dedupCapacity: Int = 4_096,
@@ -65,7 +83,7 @@ data class MeshProfile(
     val originPerSecond: Int = 2,
 ) {
     fun validate(): MeshProfile = apply {
-        require(initialTtl in 0..2) { "initialTtl must be 0..2" }
+        require(initialTtl in 0..MAX_TTL) { "initialTtl must be 0..$MAX_TTL" }
         require(maxAgeMs in 500..30_000 && futureToleranceMs in 0..5_000) { "freshness limits" }
         require(dedupCapacity in 64..16_384 && dedupRetentionMs in maxAgeMs..120_000) { "dedup limits" }
         require(neighborCapacity in 3..4_096 && neighborRetentionMs in 5_000..120_000) { "neighbor limits" }
@@ -77,7 +95,11 @@ data class MeshProfile(
     }
 }
 
-fun stageFix(role: Role) = GeoFix(12.0 - (role.stageId - 1) * 100.0 / 111_195.0, 77.0, 0.0, 10.0, true)
+const val MAX_TTL = 15
+/** Stage phones stand in a line heading north, [STAGE_GAP_M] apart; chain position 0 (the observer) is in front. */
+const val STAGE_GAP_M = 40.0
+fun stageFix(rank: Int) = GeoFix(12.0 - rank * STAGE_GAP_M / 111_195.0, 77.0, 0.0, 10.0, true)
+fun stageFix(role: Role) = stageFix((role.stageId - 1).toInt())
 fun distanceM(a: GeoFix, b: GeoFix): Double {
     val dy = Math.toRadians(b.lat - a.lat); val dx = Math.toRadians(b.lon - a.lon)
     val h = sin(dy / 2).pow(2) + cos(Math.toRadians(a.lat)) * cos(Math.toRadians(b.lat)) * sin(dx / 2).pow(2)
@@ -89,10 +111,25 @@ fun bearing(a: GeoFix, b: GeoFix): Double {
 }
 fun angleDifference(a: Double, b: Double) = abs((a - b + 540) % 360 - 180)
 
-fun interface LinkPolicy { fun accepts(local: NodeId, forwarder: NodeId): Boolean }
-object OpenLinks : LinkPolicy { override fun accepts(local: NodeId, forwarder: NodeId) = local != forwarder }
-/** Disclosed staging filter. Radio reception can overlap physically; this controls acceptance. */
-object StageChain : LinkPolicy {
-    override fun accepts(local: NodeId, forwarder: NodeId) = abs(local.value - forwarder.value) == 1L &&
-        local.value in 1L..3L && forwarder.value in 1L..3L
+/** Chain position carried on air when the sender does not know its own. */
+const val NO_RANK = 255
+
+/** Decides whether a frame from [forwarder] (at chain position [forwarderRank]) counts as a radio link to [local]. */
+fun interface LinkPolicy { fun accepts(local: NodeId, forwarder: NodeId, forwarderRank: Int): Boolean }
+object OpenLinks : LinkPolicy { override fun accepts(local: NodeId, forwarder: NodeId, forwarderRank: Int) = local != forwarder }
+
+/**
+ * Disclosed staging filter for phones lying on one table: radio reception overlaps physically, so a node accepts a frame
+ * only from the position directly in front of it. [rank] is this node's current chain position.
+ */
+class ChainLinks(private val rank: () -> Int) : LinkPolicy {
+    override fun accepts(local: NodeId, forwarder: NodeId, forwarderRank: Int): Boolean {
+        val mine = rank()
+        return local != forwarder && mine != NO_RANK && forwarderRank != NO_RANK && forwarderRank == mine - 1
+    }
+}
+/** The fixed three-phone stage: node ids 1, 2, 3 are positions 0, 1, 2. */
+val StageChain: LinkPolicy = LinkPolicy { local, forwarder, forwarderRank ->
+    local.value in 1L..3L && forwarder.value in 1L..3L && abs(local.value - forwarder.value) == 1L &&
+        (forwarderRank == NO_RANK || forwarderRank == (forwarder.value - 1).toInt())
 }

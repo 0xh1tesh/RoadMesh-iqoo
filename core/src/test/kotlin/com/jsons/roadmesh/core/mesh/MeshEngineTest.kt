@@ -14,8 +14,8 @@ private val demoBrake = LocalHazard(HazardKind.BRAKING, Provenance.DEMO, "test-s
 
 class MeshEngineTest {
     private val clock = TestClock()
-    private fun stage(role: Role, profile: MeshProfile = MeshProfile(), announce: Boolean = role == Role.RECEIVER) =
-        MeshEngine(NodeId(role.stageId), role.stageId.toInt(), 42, profile, clock, PositionSource { stageFix(role) }, StageChain, announce) { 0 }
+    private fun stage(role: Role, profile: MeshProfile = MeshProfile(initialTtl = 1), announce: Boolean = role == Role.RECEIVER) =
+        MeshEngine(NodeId(role.stageId), role.stageId.toInt(), 42, profile, clock, PositionSource { stageFix(role) }, StageChain, announce, random = { 0 })
     private fun firstFrame() = stage(Role.OBSERVER).publish(demoBrake).filterIsInstance<MeshEffect.Transmit>().single().frame
     private fun bytes(frame: HazardEnvelope) = HazardEnvelopeCodec.encode(frame)
     private fun code(effects: List<MeshEffect>, reason: String) = effects.any { it is MeshEffect.Notice && it.code == reason }
@@ -23,7 +23,7 @@ class MeshEngineTest {
     @Test fun threePhoneChainUsesTwoRadioLinksAndOneRelay() {
         val a = stage(Role.OBSERVER); val b = stage(Role.RELAY); val c = stage(Role.RECEIVER)
         val originated = a.publish(demoBrake).filterIsInstance<MeshEffect.Transmit>().single().frame
-        assertEquals(58, bytes(originated).size)
+        assertEquals(61, bytes(originated).size)
         assertTrue(code(c.receive(bytes(originated)), "link_filtered"))
         assertEquals(1, b.receive(bytes(originated)).filterIsInstance<MeshEffect.Received>().size)
         clock.advance(250)
@@ -55,7 +55,8 @@ class MeshEngineTest {
             val variant = original.copy(provenance = provenance)
             assertEquals(variant, HazardEnvelopeCodec.decode(bytes(variant)))
         }
-        assertNull(HazardEnvelopeCodec.decode(bytes(original).also { it[it.lastIndex] = 99 }))
+        assertNull(HazardEnvelopeCodec.decode(bytes(original).also { it[it.lastIndex - 3] = 99 }))
+        assertNull(HazardEnvelopeCodec.decode(bytes(original).also { it[it.lastIndex - 2] = 99 }))
         assertNull(HazardEnvelopeCodec.decode(bytes(original).copyOf(27)))
         val unknown = bytes(original).also { it[28] = 99 }; assertNull(HazardEnvelopeCodec.decode(unknown))
         val inconsistent = original.copy(packet = original.packet.copy(seq = 7)); assertNull(HazardEnvelopeCodec.decode(bytes(inconsistent)))
@@ -67,7 +68,7 @@ class MeshEngineTest {
     }
 
     @Test fun fullIdsAndSessionNonceAvoidLegacyAliasCollisionsAndShortRestartLoss() {
-        val listener = MeshEngine(NodeId(9), 9, 42, MeshProfile(), clock, PositionSource { stageFix(Role.RELAY) }, OpenLinks, false) { 0 }
+        val listener = MeshEngine(NodeId(9), 9, 42, MeshProfile(initialTtl = 1), clock, PositionSource { stageFix(Role.RELAY) }, OpenLinks, false, random = { 0 })
         val f = firstFrame()
         assertEquals(1, listener.receive(bytes(f)).filterIsInstance<MeshEffect.Received>().size)
         val other = f.copy(id = f.id.copy(origin = NodeId(0x100000001)), forwarder = NodeId(0x100000001))
@@ -103,7 +104,7 @@ class MeshEngineTest {
     @Test fun noHeadingOrOncomingTrafficDoesNotAnnounce() {
         val f = firstFrame().relayedBy(NodeId(2), 2)!!
         var fix = stageFix(Role.RECEIVER).copy(heading = 180.0)
-        fun listener() = MeshEngine(NodeId(3), 3, 1, MeshProfile(), clock, PositionSource { fix }, StageChain) { 0 }
+        fun listener() = MeshEngine(NodeId(3), 3, 1, MeshProfile(initialTtl = 1), clock, PositionSource { fix }, StageChain, random = { 0 })
         assertTrue(listener().receive(bytes(f)).filterIsInstance<MeshEffect.Announce>().isEmpty())
         fix = fix.copy(heading = null)
         assertTrue(listener().receive(bytes(f)).filterIsInstance<MeshEffect.Announce>().isEmpty())
@@ -115,7 +116,7 @@ class MeshEngineTest {
     @Test fun validatedDuplicateProgressCancelsPendingRelay() {
         val p = MeshProfile(initialTtl = 2, suppressionCopies = 2)
         val origin = stage(Role.OBSERVER, p).publish(demoBrake).filterIsInstance<MeshEffect.Transmit>().single().frame
-        val listener = MeshEngine(NodeId(10), 10, 1, p, clock, PositionSource { stageFix(Role.RELAY) }, OpenLinks, false) { 0 }
+        val listener = MeshEngine(NodeId(10), 10, 1, p, clock, PositionSource { stageFix(Role.RELAY) }, OpenLinks, false, random = { 0 })
         listener.receive(bytes(origin))
         assertEquals(1, listener.bounds.pending)
         val copy = origin.relayedBy(NodeId(11), 11)!!
@@ -127,8 +128,8 @@ class MeshEngineTest {
     }
 
     @Test fun boundedTablesRejectOverflowWithoutEvictingLiveDedupKeys() {
-        val p = MeshProfile(dedupCapacity = 64, neighborCapacity = 100, pendingCapacity = 2)
-        val listener = MeshEngine(NodeId(200), 200, 1, p, clock, PositionSource { stageFix(Role.RELAY) }, OpenLinks, false) { 0 }
+        val p = MeshProfile(initialTtl = 1, dedupCapacity = 64, neighborCapacity = 100, pendingCapacity = 2)
+        val listener = MeshEngine(NodeId(200), 200, 1, p, clock, PositionSource { stageFix(Role.RELAY) }, OpenLinks, false, random = { 0 })
         val f = firstFrame()
         for (id in 1L..65) {
             val incoming = f.copy(id = f.id.copy(origin = NodeId(id)), forwarder = NodeId(id))
@@ -143,8 +144,8 @@ class MeshEngineTest {
     }
 
     @Test fun neighborTableAndOriginRateHaveIndependentLimits() {
-        val p = MeshProfile(neighborCapacity = 3)
-        val listener = MeshEngine(NodeId(20), 20, 1, p, clock, PositionSource { stageFix(Role.RELAY) }, OpenLinks, false) { 0 }
+        val p = MeshProfile(initialTtl = 1, neighborCapacity = 3)
+        val listener = MeshEngine(NodeId(20), 20, 1, p, clock, PositionSource { stageFix(Role.RELAY) }, OpenLinks, false, random = { 0 })
         val f = firstFrame()
         for (id in 1L..4) {
             val effects = listener.receive(bytes(f.copy(id = f.id.copy(origin = NodeId(id)), forwarder = NodeId(id))))
@@ -157,13 +158,14 @@ class MeshEngineTest {
 
     @Test fun expiredPendingRelaysAreNotSentAndTtlCannotBeExtended() {
         val f = firstFrame(); val b = stage(Role.RELAY)
-        assertTrue(code(b.receive(bytes(f.copy(packet = f.packet.copy(ttl = 2)))), "hop_budget"))
+        assertTrue(code(b.receive(bytes(f.copy(ttl = 2, packet = f.packet.copy(ttl = 2)))), "hop_budget"))
+        assertTrue(code(b.receive(bytes(f.copy(packet = f.packet.copy(ttl = 2)))), "decode_rejected"))
         b.receive(bytes(f)); clock.advance(5_100)
         assertTrue(b.tick().filterIsInstance<MeshEffect.Transmit>().isEmpty())
     }
 
     @Test fun geometryAndProfileValidationAreMeaningful() {
-        assertEquals(100.0, distanceM(stageFix(Role.OBSERVER), stageFix(Role.RELAY)), .5)
+        assertEquals(STAGE_GAP_M, distanceM(stageFix(Role.OBSERVER), stageFix(Role.RELAY)), .5)
         assertEquals(0.0, bearing(stageFix(Role.RELAY), stageFix(Role.OBSERVER)), .01)
         assertEquals(2.0, angleDifference(359.0, 1.0), .01)
         assertThrows(IllegalArgumentException::class.java) { MeshProfile(pendingCapacity = 0).validate() }

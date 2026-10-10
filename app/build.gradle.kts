@@ -12,8 +12,8 @@ android {
         applicationId = "com.jsons.roadmesh"
         minSdk = 31
         targetSdk = 36
-        versionCode = 4
-        versionName = "0.3.0"
+        versionCode = 5
+        versionName = "0.4.0"
         // Loaners are arm64; override for future targets or an emulator without changing source.
         ndk { abiFilters += providers.gradleProperty("roadmeshAbis").orElse("arm64-v8a").get().split(',').map { it.trim() } }
     }
@@ -36,6 +36,15 @@ android {
     testOptions { unitTests.isIncludeAndroidResources = true }
     // The ONNX detector and the dashcam clip are read in place from the APK.
     androidResources { noCompress += listOf("onnx", "mp4") }
+    // The HTP skel is loaded by the NPU through FastRPC by file path, so native libraries are extracted to disk.
+    // Only the Hexagon generations of recent Snapdragons are kept (V75 8 Gen 3, V79 8 Elite, V81 8 Elite Gen 5).
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+            excludes += listOf("**/libQnnGpu*.so", "**/libQnnDsp*.so", "**/libQnnSaver.so", "**/libQnnCpu.so",
+                "**/libQnnHtpV68*.so", "**/libQnnHtpV69*.so", "**/libQnnHtpV73*.so")
+        }
+    }
 }
 
 dependencies {
@@ -47,7 +56,7 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     // On-device LLM (Gemma 2B int4 on CPU) for the co-pilot. The model file is imported at run time, never bundled.
-    implementation("com.google.mediapipe:tasks-genai:0.10.24")
+    implementation("com.google.mediapipe:tasks-genai:0.10.32")
 
     testImplementation("junit:junit:4.13.2")
     // Screen renders on the JVM (Robolectric native graphics + Roborazzi). Only compiled with -PwithScreenshots=true.

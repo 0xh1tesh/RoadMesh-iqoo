@@ -1,0 +1,20 @@
+{
+  "id": "nootron/resilane-road-yolo",
+  "title": "resilane-road-yolo",
+  "code_file": "train.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "dataset_sources": [
+    "anggadwisunarto/potholes-detection-yolov8",
+    "vidishbijalwan/rdd2022-india-pothole-d40",
+    "andrewmvd/pothole-detection",
+    "aneesarom/rider-with-helmet-without-helmet-number-plate",
+    "andrewmvd/helmet-detection"
+  ],
+  "competition_sources": [],
+  "kernel_sources": [],
+  "model_sources": []
+}

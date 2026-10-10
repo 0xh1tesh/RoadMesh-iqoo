@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "rdd2022": {
+    "homepage": "https://github.com/sekilab/RoadDamageDetector",
+    "base_url": "https://bigdatacup.s3.ap-northeast-1.amazonaws.com/2022/CRDDC2022/RDD2022/Country_Specific_Data_CRDDC2022/",
+    "countries": ["India", "Japan", "Czech", "United_States", "China_MotorBike"],
+    "license": "CC-BY-SA-4.0 (upstream repository; Figshare metadata says CC-BY-4.0; retain stricter source terms)",
+    "license_url": "https://github.com/sekilab/RoadDamageDetector#license",
+    "citation": "Arya et al. RDD2022: A multi-national image dataset for automatic Road Damage Detection. arXiv:2209.08538",
+    "native_classes": {"D00": "longitudinal_crack", "D10": "transverse_crack", "D20": "alligator_crack", "D40": "pothole"},
+    "excluded": {"Norway": "9.9 GB archive exceeds current workspace disk budget", "China_Drone": "aerial domain; not forward phone/dashcam"}
+  },
+  "udacity": {
+    "homepage": "https://github.com/udacity/self-driving-car/tree/master/annotations",
+    "archive_url": "https://bit.ly/udacity-annoations-crowdai",
+    "labels_api": "https://api.github.com/repos/udacity/self-driving-car/contents/annotations/labels_crowdai.csv",
+    "license": "Educational purposes only per official annotations README; incomplete labels",
+    "native_classes": {"Car": "car", "Truck": "truck", "Pedestrian": "person"}
+  }
+}

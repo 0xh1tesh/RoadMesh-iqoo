@@ -18,3 +18,4 @@ test-data/*.csv
 exports/
 __pycache__/
 *.pyc
+.playwright-cli/

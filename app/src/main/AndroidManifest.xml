@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
@@ -27,6 +28,7 @@
         android:name=".RoadMeshApplication"
         android:icon="@drawable/ic_roadmesh"
         android:allowBackup="false"
+        android:usesCleartextTraffic="true"
         android:label="RESILANE"
         android:largeHeap="true"
         android:supportsRtl="true"
@@ -40,7 +42,10 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- Tries the Hexagon NPU once in its own process, so a native fault there cannot take the app down. -->
+        <service android:name=".perception.NpuProbeService" android:process=":npu" android:exported="false" />
         <activity android:name=".RoadMeshSceneActivity" android:screenOrientation="landscape" android:exported="false" />
+        <activity android:name=".telemetry.MeshDeskActivity" android:exported="false" />
         <service android:name=".service.MeshService" android:foregroundServiceType="connectedDevice|location" android:exported="false" />
     </application>
 

@@ -25,11 +25,11 @@ class AppPreferences(context: Context) {
     fun saveProfile(json: String): MeshProfile = parseProfile(json).also {
         prefs.edit().putString("profile", profileJson(it).toString(2)).apply()
     }
-    fun setMode(mode: Mode) = saveProfile(profileJson(profile.copy(mode = mode, initialTtl = if (mode == Mode.STAGE) 1 else 2)).toString())
+    fun setMode(mode: Mode) = saveProfile(profileJson(profile.copy(mode = mode, initialTtl = MeshProfile(mode).initialTtl)).toString())
 }
 
 fun profileJson(p: MeshProfile) = JSONObject().apply {
-    put("schema", 1); put("mode", p.mode.name); put("initialTtl", p.initialTtl)
+    put("schema", 2); put("mode", p.mode.name); put("initialTtl", p.initialTtl)
     put("maxAgeMs", p.maxAgeMs); put("futureToleranceMs", p.futureToleranceMs)
     put("dedupCapacity", p.dedupCapacity); put("dedupRetentionMs", p.dedupRetentionMs)
     put("neighborCapacity", p.neighborCapacity); put("neighborRetentionMs", p.neighborRetentionMs)
@@ -41,7 +41,10 @@ fun parseProfile(text: String): MeshProfile {
     val j = JSONObject(text)
     val allowed = profileJson(MeshProfile()).keys().asSequence().toSet()
     j.keys().forEach { require(it in allowed) { "Unknown setting: $it" } }
-    if (j.has("schema")) require(j.get("schema") is Number && (j.get("schema") as Number).toDouble() == 1.0) { "schema must be integer 1" }
+    if (j.has("schema")) require(j.get("schema") is Number && (j.get("schema") as Number).toDouble() in setOf(1.0, 2.0)) { "schema must be integer 1 or 2" }
+    // Schema 1 profiles came from the fixed three-phone chain, whose relay budget (1 or 2) would stop a longer chain;
+    // they take the current default budget instead.
+    val legacy = j.optInt("schema", 2) == 1
     if (j.has("mode")) require(j.get("mode") is String) { "mode must be STAGE or ROAD" }
     val mode = Mode.valueOf(j.optString("mode", "STAGE"))
     val d = MeshProfile(mode)
@@ -58,7 +61,7 @@ fun parseProfile(text: String): MeshProfile {
         require(value is Number && value.toDouble().isFinite()) { "$key must be a number" }
         return value.toDouble()
     }
-    return d.copy(initialTtl = int("initialTtl", d.initialTtl), maxAgeMs = long("maxAgeMs", d.maxAgeMs),
+    return d.copy(initialTtl = if (legacy) d.initialTtl else int("initialTtl", d.initialTtl), maxAgeMs = long("maxAgeMs", d.maxAgeMs),
         futureToleranceMs = long("futureToleranceMs", d.futureToleranceMs), dedupCapacity = int("dedupCapacity", d.dedupCapacity),
         dedupRetentionMs = long("dedupRetentionMs", d.dedupRetentionMs), neighborCapacity = int("neighborCapacity", d.neighborCapacity),
         neighborRetentionMs = long("neighborRetentionMs", d.neighborRetentionMs), pendingCapacity = int("pendingCapacity", d.pendingCapacity),

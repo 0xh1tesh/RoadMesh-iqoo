@@ -29,7 +29,7 @@ import kotlin.math.sin
 
 private fun ObjectClass.lengthM() = when (this) {
     ObjectClass.CAR -> 4.4; ObjectClass.BUS -> 10.0; ObjectClass.TRUCK -> 8.0; ObjectClass.MOTORCYCLE -> 2.0
-    ObjectClass.BICYCLE -> 1.7; ObjectClass.PERSON -> 0.6; ObjectClass.OTHER -> 1.0
+    ObjectClass.BICYCLE -> 1.7; ObjectClass.PERSON -> 0.6; else -> 1.0
 }
 private fun ObjectClass.heightM() = when (this) {
     ObjectClass.BUS, ObjectClass.TRUCK -> 3.0; ObjectClass.PERSON -> 1.65; ObjectClass.MOTORCYCLE, ObjectClass.BICYCLE -> 1.4; else -> 1.5
@@ -166,7 +166,7 @@ private fun DrawScope.arrow(from: Offset, to: Offset, color: Color, width: Float
     }
 }
 
-enum class TabIcon { OBSERVE, RELAY, RECEIVED }
+enum class TabIcon { OBSERVE, RELAY, RECEIVED, MESH, REPORTS }
 
 /** Stroke icons for the three tabs, drawn so no icon font is needed. */
 @Composable fun TabGlyph(icon: TabIcon, color: Color, size: Dp = 24.dp) {
@@ -181,6 +181,15 @@ enum class TabIcon { OBSERVE, RELAY, RECEIVED }
                 drawCircle(color, 0.08f * w, Offset(0.5f * w, 0.62f * w))
                 drawArc(color, 215f, 110f, false, Offset(0.26f * w, 0.38f * w), Size(0.48f * w, 0.48f * w), style = st)
                 drawArc(color, 215f, 110f, false, Offset(0.08f * w, 0.2f * w), Size(0.84f * w, 0.84f * w), style = st)
+            }
+            TabIcon.MESH -> {
+                val a = Offset(0.2f * w, 0.78f * w); val b = Offset(0.5f * w, 0.22f * w); val c = Offset(0.82f * w, 0.7f * w)
+                drawLine(color, a, b, strokeWidth = w * 0.07f); drawLine(color, b, c, strokeWidth = w * 0.07f); drawLine(color, a, c, strokeWidth = w * 0.07f)
+                listOf(a, b, c).forEach { drawCircle(color, 0.12f * w, it) }
+            }
+            TabIcon.REPORTS -> {
+                drawRoundRect(color, Offset(0.18f * w, 0.12f * w), Size(0.64f * w, 0.8f * w), CornerRadius(0.08f * w), style = st)
+                for (y in listOf(0.36f, 0.54f, 0.72f)) drawLine(color, Offset(0.32f * w, y * w), Offset(0.68f * w, y * w), strokeWidth = w * 0.07f, cap = StrokeCap.Round)
             }
             TabIcon.RECEIVED -> {
                 drawPath(Path().apply { moveTo(0.1f * w, 0.55f * w); lineTo(0.1f * w, 0.88f * w); lineTo(0.9f * w, 0.88f * w); lineTo(0.9f * w, 0.55f * w) }, color, style = st)

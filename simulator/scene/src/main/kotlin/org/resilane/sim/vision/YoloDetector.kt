@@ -18,10 +18,11 @@ import java.nio.ByteOrder
 import java.nio.FloatBuffer
 
 /**
- * YOLO11n (COCO, 80 classes) exported to ONNX at 640x320 (portrait, like the phone's frame),
- * run with ONNX Runtime. Uses the XNNPACK execution provider when available.
+ * YOLO11n exported to ONNX, run with ONNX Runtime. With [npu] it asks for the Qualcomm QNN execution provider on the
+ * Hexagon NPU (HTP, fp16); unsupported layers fall back to the CPU. Without it, or if QNN is unavailable, it uses
+ * XNNPACK when the runtime has it, else ONNX Runtime's own CPU kernels. [provider] says which one is running.
  */
-class YoloDetector(context: Context, asset: String = "models/yolo11n_640x320.onnx") : AutoCloseable {
+class YoloDetector(context: Context, asset: String = "models/yolo11n_640x320.onnx", npu: Boolean = false) : AutoCloseable {
     private val env = OrtEnvironment.getEnvironment()
     private val session: OrtSession
     private val inputName: String
@@ -40,15 +41,25 @@ class YoloDetector(context: Context, asset: String = "models/yolo11n_640x320.onn
     init {
         val bytes = context.assets.open(asset).use { it.readBytes() }
         var used = "CPU"
-        val opts = OrtSession.SessionOptions()
-        try {
-            opts.addXnnpack(mapOf("intra_op_num_threads" to "4"))
-            opts.setIntraOpNumThreads(1)
-            used = "XNNPACK"
-        } catch (e: Exception) {
-            opts.setIntraOpNumThreads(4)
+        var opts = OrtSession.SessionOptions()
+        var made: OrtSession? = null
+        if (npu) runCatching {
+            opts.addQnn(mapOf("backend_path" to "libQnnHtp.so", "htp_performance_mode" to "burst", "enable_htp_fp16_precision" to "1",
+                "htp_graph_finalization_optimization_mode" to "3"))
+            opts.setIntraOpNumThreads(2)
+            made = env.createSession(bytes, opts); used = "QNN-HTP"
+        }.onFailure { RLog.i("Yolo", "QNN unavailable: ${it.message}"); opts = OrtSession.SessionOptions() }
+        if (made == null) {
+            try {
+                opts.addXnnpack(mapOf("intra_op_num_threads" to "4"))
+                opts.setIntraOpNumThreads(1)
+                used = "XNNPACK"
+            } catch (e: Exception) {
+                opts.setIntraOpNumThreads(4)
+            }
+            made = env.createSession(bytes, opts)
         }
-        session = env.createSession(bytes, opts)
+        session = made!!
         provider = used
         inputName = session.inputNames.first()
         val inShape = (session.inputInfo[inputName]!!.info as ai.onnxruntime.TensorInfo).shape

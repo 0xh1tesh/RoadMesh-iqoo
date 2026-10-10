@@ -83,11 +83,11 @@ import com.jsons.roadmesh.copilot.CopilotState
     return Triple(listening, partial, start)
 }
 
-private val suggestions = listOf("Is it safe to overtake now?", "What's ahead of me?", "Should I slow down?")
+private val suggestions = listOf("What's the road like ahead?", "Any potholes ahead?", "Will I have to stop?", "Any accidents ahead?")
 
 /**
- * Ask the co-pilot by voice or text. Answers come from this phone's own camera and the warnings it holds; an
- * overtaking question shows the rule's verdict at once and the co-pilot's wording as it streams in.
+ * Ask the co-pilot by voice or text. Every question asks the phones ahead and behind over the mesh; the answer comes
+ * from the combined picture (shown at once as plain text) and the co-pilot's wording streams in after it.
  */
 @Composable fun AskPanel(questions: List<Question>, copilot: CopilotState, ask: (String) -> Unit) {
     var text by remember { mutableStateOf("") }
@@ -122,18 +122,15 @@ private val suggestions = listOf("Is it safe to overtake now?", "What's ahead of
     val line = copilot.lines[q.tag]
     Column(Modifier.fillMaxWidth().background(Tokens.Ink, RoundedCornerShape(16.dp)).padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("“${q.text}”", color = Tokens.Muted, fontSize = 15.sp)
-        q.notNow?.let { notNow ->
-            Text(if (notNow) "NOT NOW" else "NOTHING SEEN AGAINST IT", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, letterSpacing = 0.5.sp,
-                color = Tokens.Ink, modifier = Modifier.background(if (notNow) Tokens.Red else Tokens.Green, RoundedCornerShape(8.dp)).padding(horizontal = 10.dp, vertical = 4.dp))
-        }
         when {
             line != null && line.text.isNotEmpty() -> Text(line.text + if (line.done) "" else " ▍", fontSize = 18.sp, lineHeight = 25.sp, fontWeight = FontWeight.Medium)
+            q.answer == null -> Text("Asking the phones ahead and behind…", color = Tokens.Yellow, fontSize = 15.sp)
             line != null -> Text("Thinking…", color = Tokens.Yellow, fontSize = 15.sp)
-            q.verdict != null -> Text(q.verdict, fontSize = 17.sp, lineHeight = 24.sp)
-            !copilot.ready -> Text("The co-pilot model is not installed on this phone, so only rule-based answers are available.", color = Tokens.Faint, fontSize = 14.sp)
+            else -> Text(q.answer, fontSize = 17.sp, lineHeight = 24.sp)
         }
-        if (q.verdict != null && line?.text?.isNotEmpty() == true) Text("Rule check: ${q.verdict}", color = Tokens.Faint, fontSize = 13.sp, lineHeight = 18.sp)
-        Text("Answered on this phone from its own camera and the mesh. It cannot see everything: check your mirrors.", color = Tokens.Faint, fontSize = 12.sp)
+        if (q.answer != null && line?.text?.isNotEmpty() == true) Text("From the mesh: ${q.answer}", color = Tokens.Faint, fontSize = 13.sp, lineHeight = 18.sp)
+        q.picture?.let { Text("${it.peers.size} phone${if (it.peers.size == 1) "" else "s"} answered · ${it.items.size} hazard${if (it.items.size == 1) "" else "s"} on the combined map", color = Tokens.Faint, fontSize = 12.sp) }
+        Text("Answered on this phone from the mesh and its own camera, offline. It only knows what phones report.", color = Tokens.Faint, fontSize = 12.sp)
     }
 }
 

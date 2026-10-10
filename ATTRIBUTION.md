@@ -10,7 +10,15 @@ Every library, model, dataset and reference used, with its licence. Update in th
 | JSON-java 20240303 | JVM-only validation tests for Android JSON profiles | Public domain | https://github.com/stleary/JSON-java |
 | ARCore SDK for Android `com.google.ar:core` 1.48.0 | simulator/: 6-DoF tracking, marker shared frame | Apache-2.0 (runtime: Google Play Services for AR terms) | https://github.com/google-ar/arcore-android-sdk |
 | Nearby Connections `play-services-nearby` 19.3.0 | simulator/: phone-to-phone pose relay | Android SDK License / Google APIs Terms | https://developers.google.com/nearby/connections |
-| ONNX Runtime Android `onnxruntime-android` 1.20.0 | simulator/: on-device YOLO inference | MIT | https://github.com/microsoft/onnxruntime |
+| ONNX Runtime Android, QNN build `onnxruntime-android-qnn` 1.29.0 | On-device YOLO inference, CPU or Hexagon NPU | MIT | https://github.com/microsoft/onnxruntime |
+| Qualcomm AI Engine Direct runtime `com.qualcomm.qti:qnn-runtime` 2.50.0 | Hexagon NPU (HTP) backend libraries | Qualcomm licence shipped with the Maven artifact | https://central.sonatype.com/artifact/com.qualcomm.qti/qnn-runtime |
+| MediaPipe LLM Inference `tasks-genai` 0.10.32 | On-device co-pilot runtime | Apache-2.0 | https://github.com/google-ai-edge/mediapipe |
+| Gemma 2B-it (not committed; fine-tuned copy built by `tools/copilot`) | Co-pilot language model | Gemma Terms of Use | https://ai.google.dev/gemma/terms |
+| PEFT, Transformers, Ultralytics (Kaggle training jobs only) | LoRA fine-tune, YOLO training | Apache-2.0 / Apache-2.0 / AGPL-3.0 | https://github.com/huggingface/peft, https://github.com/huggingface/transformers, https://github.com/ultralytics/ultralytics |
+| Kaggle datasets for the road model: `vidishbijalwan/rdd2022-india-pothole-d40` (RDD2022, CC BY-SA 4.0), `anggadwisunarto/potholes-detection-yolov8`, `andrewmvd/pothole-detection`, `andrewmvd/helmet-detection`, `aneesarom/rider-with-helmet-without-helmet-number-plate` | Training data for pothole / helmet / no-helmet (`tools/kaggle/road_yolo`) | Per each dataset page on Kaggle | https://www.kaggle.com/datasets |
+| *C V Raman Road* dashcam clip | Bundled dashcam replay | CC0 | Wikimedia Commons |
+| *Cars Moving into pothole* (Amuzujoe), transcoded to 640x360 | Bundled roadside pothole clip | CC BY-SA 4.0 | https://commons.wikimedia.org/wiki/File:Cars_Moving_into_pothole.webm |
+| *Rainwater-Filled Potholes on a Community Road* (Knowledge and philosophy), transcoded to 640x360 | Bundled roadside pothole clip | CC BY-SA 4.0 | https://commons.wikimedia.org/wiki/File:Rainwater-Filled_Potholes_on_a_Community_Road.webm |
 | ONNX Runtime JVM 1.20.0 (opt-in test dependency) | Optional model evaluation on laptop | MIT | https://github.com/microsoft/onnxruntime |
 | AndroidX core, activity, lifecycle | simulator/: app framework | Apache-2.0 | https://developer.android.com/jetpack/androidx |
 | Ultralytics YOLO11n weights (not committed; `simulator/tools/fetch_model.py`) | simulator/: car detector scored against simulator ground truth | AGPL-3.0 (enterprise licence otherwise) | https://github.com/ultralytics/ultralytics |
