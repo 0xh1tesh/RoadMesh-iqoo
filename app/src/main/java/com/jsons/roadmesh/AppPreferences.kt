@@ -13,8 +13,14 @@ class AppPreferences(context: Context) {
     })
     val alias = prefs.getInt("alias", 0).takeIf { it != 0 } ?: (1 + random.nextInt(0xfffffe)).also { prefs.edit().putInt("alias", it).apply() }
     var role: Role
-        get() = runCatching { Role.valueOf(prefs.getString("role", null) ?: "DETECTOR") }.getOrDefault(Role.DETECTOR)
+        get() = runCatching { Role.valueOf(prefs.getString("role", null) ?: "OBSERVER") }.getOrDefault(Role.OBSERVER)
         set(value) { prefs.edit().putString("role", value.name).apply() }
+    var vehicle: VehicleType
+        get() = VehicleType.from(prefs.getInt("vehicle", VehicleType.CAR.code))
+        set(value) { prefs.edit().putInt("vehicle", value.code).apply() }
+    var onboarded: Boolean
+        get() = prefs.getBoolean("onboarded", false)
+        set(value) { prefs.edit().putBoolean("onboarded", value).apply() }
     val profile: MeshProfile get() = runCatching { parseProfile(prefs.getString("profile", null) ?: "{}") }.getOrElse { MeshProfile() }
     fun saveProfile(json: String): MeshProfile = parseProfile(json).also {
         prefs.edit().putString("profile", profileJson(it).toString(2)).apply()

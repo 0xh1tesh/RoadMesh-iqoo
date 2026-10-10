@@ -7,6 +7,7 @@ import android.os.SystemClock
 import android.provider.MediaStore
 import com.jsons.roadmesh.*
 import com.jsons.roadmesh.core.mesh.*
+import com.jsons.roadmesh.core.insight.NodeInference
 import com.jsons.roadmesh.output.HazardOutput
 import com.jsons.roadmesh.radio.*
 import com.jsons.roadmesh.sensing.AndroidPositionSource
@@ -18,12 +19,26 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.security.SecureRandom
 
+/**
+ * One warning's path through this phone: where it came from, what this node concluded, and whether it was passed on.
+ * [inference] is deterministic (origin range + distance to origin); the co-pilot only phrases it.
+ */
+data class EventTrace(
+    val id: MessageId, val kind: HazardKind?, val detail: HazardDetail?, val originated: Boolean,
+    val via: NodeId, val atMs: Long, val toOriginM: Double? = null, val inference: NodeInference? = null,
+    val sentAtMs: Long? = null, val relayedAtMs: Long? = null, val announced: Boolean = false, val hops: Int = 0, val canRelay: Boolean = false,
+)
+
+/** Stage phones are nodes 1, 2, 3: A, B, C. Anything else shows its short hex id. */
+fun NodeId.letter(): String = if (value in 1L..3L) ('A' + (value - 1).toInt()).toString() else toString().takeLast(4)
+
 data class LogEntry(val utcMs: Long, val monotonicMs: Long, val code: String, val detail: String, val frame: HazardEnvelope? = null)
 data class SessionState(
     val role: Role, val mode: Mode, val running: Boolean = false, val ready: Boolean = false,
     val status: String = "Choose a role, then start", val lastReceived: HazardEnvelope? = null,
     val lastTx: HazardEnvelope? = null, val alert: MeshEffect.Announce? = null,
     val counters: Map<String, Int> = emptyMap(), val logs: List<LogEntry> = emptyList(), val bounds: MeshBounds = MeshBounds(0, 0, 0),
+    val events: List<EventTrace> = emptyList(), val node: NodeId? = null,
 )
 
 class MeshSession(private val context: Context, val preferences: AppPreferences) {
@@ -35,6 +50,7 @@ class MeshSession(private val context: Context, val preferences: AppPreferences)
     private var tx: Channel<MeshEffect.Transmit>? = null
     private var transport: HazardTransport? = null
     private var position: AndroidPositionSource? = null
+    private var source: PositionSource? = null
     private var output: HazardOutput? = null
     private var activeProfile: MeshProfile? = null
     private var activeNode: NodeId? = null
@@ -69,13 +85,14 @@ class MeshSession(private val context: Context, val preferences: AppPreferences)
         val alias = if (profile.mode == Mode.STAGE) role.stageId.toInt() else preferences.alias
         sessionNonce = SecureRandom().nextLong()
         activeProfile = profile; activeNode = node; activeRole = role
-        update { SessionState(role, profile.mode, running = true, status = "Starting BLE…") }
+        update { SessionState(role, profile.mode, running = true, status = "Starting BLE…", node = node) }
         record("session_start", "node=$node session=${java.lang.Long.toUnsignedString(sessionNonce, 16)}; ${profile.mode}; ${role.name}")
         val clock = object : MeshClock { override fun monotonicMs() = SystemClock.elapsedRealtime(); override fun utcMs() = System.currentTimeMillis() }
         val source: PositionSource = if (profile.mode == Mode.STAGE) PositionSource { stageFix(role) }
         else AndroidPositionSource(context).also { position = it; it.start() }
+        this.source = source
         val engine = MeshEngine(node, alias, sessionNonce, profile, clock, source,
-            if (profile.mode == Mode.STAGE) StageChain else OpenLinks, announce = profile.mode == Mode.ROAD || role == Role.OBSERVER)
+            if (profile.mode == Mode.STAGE) StageChain else OpenLinks, announce = true)
         val jobScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate).also { scope = it }
         val incoming = Channel<Command>(256).also { commands = it }
         val outgoing = Channel<MeshEffect.Transmit>(64).also { tx = it }
@@ -103,7 +120,10 @@ class MeshSession(private val context: Context, val preferences: AppPreferences)
                             val events = ble.transmit(HazardEnvelopeCodec.encode(request.frame), request.relay)
                             count(if (request.relay) "relay_burst" else "origin_burst")
                             record("tx_complete", "${frameDetail(request.frame)} requestedEvents=$events; remote delivery unknown", request.frame)
-                            update { it.copy(lastTx = request.frame) }
+                            val sentAt = SystemClock.elapsedRealtime()
+                            update { s -> s.copy(lastTx = request.frame, events = s.events.map { e ->
+                                if (e.id != request.frame.id) e else if (request.relay) e.copy(relayedAtMs = sentAt) else e.copy(sentAtMs = sentAt)
+                            }) }
                         } catch (e: CancellationException) { throw e }
                         catch (e: Exception) {
                             count("tx_error"); record("tx_error", e.message.orEmpty())
@@ -120,7 +140,10 @@ class MeshSession(private val context: Context, val preferences: AppPreferences)
                         Command.Tick -> { ble.maintain(clock.monotonicMs()); engine.tick() }
                     }
                     for (effect in effects) when (effect) {
-                        is MeshEffect.Originated -> { count("originated"); record("originated", "sourceEvent=${effect.sourceEvent}", effect.frame) }
+                        is MeshEffect.Originated -> {
+                            count("originated"); record("originated", "sourceEvent=${effect.sourceEvent}", effect.frame)
+                            trace(EventTrace(effect.frame.id, effect.frame.kind, effect.frame.detail, true, effect.frame.forwarder, SystemClock.elapsedRealtime(), canRelay = true))
+                        }
                         is MeshEffect.Transmit -> {
                             record("tx_queued", frameDetail(effect.frame), effect.frame)
                             if (!outgoing.trySend(effect).isSuccess) count("tx_queue_full")
@@ -128,10 +151,11 @@ class MeshSession(private val context: Context, val preferences: AppPreferences)
                         is MeshEffect.Received -> {
                             count("received"); record("received", frameDetail(effect.frame), effect.frame)
                             update { it.copy(lastReceived = effect.frame) }
+                            trace(received(effect.frame))
                         }
                         is MeshEffect.Announce -> {
                             count("caution"); record("caution", frameDetail(effect.frame), effect.frame)
-                            update { it.copy(alert = effect) }
+                            update { s -> s.copy(alert = effect, events = s.events.map { if (it.id == effect.frame.id) it.copy(announced = true) else it }) }
                             withContext(Dispatchers.Main.immediate) { output?.announce(effect) }
                         }
                         is MeshEffect.Notice -> { count(effect.code); if (effect.code != "duplicate" && effect.code != "link_filtered") record(effect.code, effect.detail) }
@@ -147,17 +171,29 @@ class MeshSession(private val context: Context, val preferences: AppPreferences)
         }
     }
 
+    private fun trace(t: EventTrace) = update { s -> s.copy(events = (listOf(t) + s.events.filter { it.id != t.id }).take(24)) }
+
+    /** This node's own inference: the origin's range to the hazard plus this node's distance to the origin. */
+    private fun received(f: HazardEnvelope): EventTrace {
+        val own = source?.current()?.takeIf { it.valid() }
+        val origin = GeoFix(f.packet.latE7 / 1e7, f.packet.lonE7 / 1e7, null, null, true)
+        val toOrigin = own?.let { distanceM(it, origin) }
+        val inference = f.kind?.let { k -> toOrigin?.let { NodeInference.at(k, f.detail, it, own.speedMps) } }
+        return EventTrace(f.id, f.kind, f.detail, false, f.forwarder, SystemClock.elapsedRealtime(), toOrigin, inference, hops = f.packet.hop, canRelay = f.packet.ttl > 0)
+    }
+
     fun publish(hazard: LocalHazard): Boolean {
         if (!state.value.ready) { record("source_rejected", "Start a ready mesh session first"); return false }
-        if (state.value.mode == Mode.STAGE && state.value.role != Role.DETECTOR) return false
         return commands?.trySend(Command.Publish(hazard))?.isSuccess == true
     }
     fun clearAlert() = update { it.copy(alert = null) }
+    /** Speaks a non-alert line through the session's offline voice, if the session is running. */
+    fun say(text: String) { output?.say(text); record("copilot_spoken", text) }
     fun fail(message: String) { record("service_error", message); update { it.copy(status = message, ready = false) } }
     fun stop() {
         accepting = false
         commands?.close(); tx?.close(); scope?.cancel(); scope = null; commands = null; tx = null
-        transport?.close(); transport = null; position?.close(); position = null; output?.close(); output = null
+        transport?.close(); transport = null; position?.close(); position = null; source = null; output?.close(); output = null
         record("session_stop", "resources released")
         update { it.copy(running = false, ready = false, status = if (it.ready || it.status == "Starting BLE…") "Stopped" else it.status) }
     }
@@ -185,7 +221,7 @@ class MeshSession(private val context: Context, val preferences: AppPreferences)
         val name = "roadmesh-${exportedRole.name.lowercase()}-${System.currentTimeMillis()}.json"
         val values = ContentValues().apply {
             put(MediaStore.Downloads.DISPLAY_NAME, name); put(MediaStore.Downloads.MIME_TYPE, "application/json")
-            put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/RoadMesh")
+            put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/RESILANE")
             put(MediaStore.Downloads.IS_PENDING, 1)
         }
         val resolver = context.contentResolver
@@ -194,7 +230,7 @@ class MeshSession(private val context: Context, val preferences: AppPreferences)
             resolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(doc.toString(2)) } ?: error("Cannot write export")
             resolver.update(uri, ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }, null, null)
         } catch (e: Exception) { resolver.delete(uri, null, null); throw e }
-        "Downloads/RoadMesh/$name"
+        "Downloads/RESILANE/$name"
     }
 }
 

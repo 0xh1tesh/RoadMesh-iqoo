@@ -64,7 +64,7 @@ fun SetupCheckScreen(canProbeRadio: Boolean = true) {
         Modifier.fillMaxSize().safeDrawingPadding().padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Text("RoadMesh setup check", style = MaterialTheme.typography.titleLarge)
+        Text("RESILANE setup check", style = MaterialTheme.typography.titleLarge)
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Button(onClick = { permissionLauncher.launch(REQUIRED_PERMISSIONS) }) { Text("Permissions", fontSize = 12.sp) }
             Button(onClick = {

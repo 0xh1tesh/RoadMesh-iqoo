@@ -25,7 +25,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContent {
-            RoadMeshScreen(mesh, ::requestStart, { stopService(Intent(this, MeshService::class.java)) }, {
+            RoadMeshScreen(application as RoadMeshApplication, ::requestStart, { stopService(Intent(this, MeshService::class.java)) }, {
                 startActivity(Intent(this, RoadMeshSceneActivity::class.java))
             })
         }

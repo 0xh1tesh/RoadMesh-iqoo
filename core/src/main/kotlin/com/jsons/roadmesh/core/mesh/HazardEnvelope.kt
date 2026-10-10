@@ -7,6 +7,9 @@ import java.nio.ByteOrder
 data class HazardEnvelope(val packet: Packet, val id: MessageId, val forwarder: NodeId, val provenance: Provenance) {
     fun relayedBy(node: NodeId, alias: Int) = PacketCodec.forRelay(packet, alias)?.let { copy(packet = it, forwarder = node) }
     val radioLinks get() = packet.hop + 1
+    /** The origin's inference (range to the hazard, vehicle type, confidence), if it sent one. */
+    val detail get() = HazardDetail.from(packet.p1, packet.p2)
+    val kind get() = HazardKind.from(packet.cause, packet.subCause)
 }
 
 /** Extended-advertising envelope v1. The original 27-byte core remains unchanged.

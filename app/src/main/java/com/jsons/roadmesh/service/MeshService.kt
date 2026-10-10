@@ -24,14 +24,14 @@ class MeshService : Service() {
     override fun onCreate() {
         super.onCreate()
         getSystemService(NotificationManager::class.java).createNotificationChannel(
-            NotificationChannel(CHANNEL, "RoadMesh mesh session", NotificationManager.IMPORTANCE_LOW))
+            NotificationChannel(CHANNEL, "RESILANE mesh session", NotificationManager.IMPORTANCE_LOW))
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == STOP) { stopSelf(); return START_NOT_STICKY }
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         val stop = PendingIntent.getService(this, 1, Intent(this, MeshService::class.java).setAction(STOP), PendingIntent.FLAG_IMMUTABLE)
         val notification = Notification.Builder(this, CHANNEL).setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentTitle("RoadMesh · ${session.state.value.role.title}").setContentText("BLE mesh session is active")
+            .setContentTitle("RESILANE · ${session.state.value.role.title}").setContentText("BLE mesh session is active")
             .setContentIntent(open).setOngoing(true).addAction(Notification.Action.Builder(null, "Stop", stop).build()).build()
         try {
             var type = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE

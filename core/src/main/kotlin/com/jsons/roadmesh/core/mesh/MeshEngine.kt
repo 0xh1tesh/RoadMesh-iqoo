@@ -57,7 +57,7 @@ class MeshEngine(
             (fix.lat * 1e7).roundToInt(), (fix.lon * 1e7).roundToInt(),
             fix.speedMps?.times(100)?.roundToInt() ?: Packet.SPEED_UNKNOWN,
             fix.heading?.let { ((it % 360) * 256 / 360).roundToInt() and 255 } ?: 0,
-            hazard.kind.cause, hazard.kind.subCause, 0, 0, alias and 255, (profile.maxAgeMs / 1_000).toInt().coerceAtLeast(1))
+            hazard.kind.cause, hazard.kind.subCause, hazard.detail?.p1 ?: 0, hazard.detail?.p2 ?: 0, alias and 255, (profile.maxAgeMs / 1_000).toInt().coerceAtLeast(1))
         val frame = HazardEnvelope(packet, id, node, hazard.provenance)
         seen[id] = Seen(now + profile.dedupRetentionMs)
         return listOf(MeshEffect.Originated(frame, hazard.sourceEvent), MeshEffect.Transmit(frame, false))
@@ -141,7 +141,8 @@ class MeshEngine(
     }
 
     private fun permitted(provenance: Provenance, synthetic: Boolean) = when (profile.mode) {
-        Mode.STAGE -> provenance == Provenance.DEMO && synthetic
+        // Stage accepts the virtual brake (DEMO) and recorded dashcam footage (REPLAY), both on synthetic positions.
+        Mode.STAGE -> (provenance == Provenance.DEMO || provenance == Provenance.REPLAY) && synthetic
         Mode.ROAD -> provenance == Provenance.LIVE && !synthetic
     }
     private fun expire(now: Long) {

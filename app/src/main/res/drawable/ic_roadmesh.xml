@@ -1,5 +1,10 @@
-<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
-    <path android:fillColor="#080E16" android:pathData="M0,0h108v108h-108z" />
-    <path android:strokeColor="#51DFDC" android:strokeWidth="6" android:fillColor="@android:color/transparent" android:pathData="M24,74L54,30L84,74M24,74h60" />
-    <path android:fillColor="#FFFFFF" android:pathData="M54,20a10,10 0,1 0,0.01 0M24,64a10,10 0,1 0,0.01 0M84,64a10,10 0,1 0,0.01 0" />
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="640" android:viewportHeight="640">
+    <path android:fillColor="#070707" android:pathData="M0,0h640v640h-640z" />
+    <group android:scaleX="0.78" android:scaleY="0.78" android:pivotX="320" android:pivotY="340">
+        <path android:fillColor="#F0B81C" android:pathData="M53 315 L53 332 L66 347 L70 355 L69 371 L61 397 L58 433 L63 467 L60 491 L60 586 L63 595 L68 600 L105 610 L120 609 L128 600 L131 570 L137 565 L145 563 L497 563 L506 565 L511 570 L515 600 L522 609 L538 610 L559 606 L574 600 L580 595 L582 586 L582 491 L580 467 L585 433 L581 397 L574 371 L573 355 L576 347 L588 335 L591 320 L587 313 L576 305 L542 300 L533 295 L521 277 L501 230 L490 220 L473 214 L409 217 L382 210 L260 210 L233 217 L198 214 L164 215 L152 220 L143 228 L122 277 L110 295 L101 300 L66 305 Z" />
+        <path android:fillColor="#070707" android:pathData="M143 274 L145 281 L150 285 L185 296 L458 296 L493 285 L500 274 L497 267 L484 248 L472 240 L464 238 L179 238 L162 244 L147 264 Z" />
+        <path android:strokeColor="#F0B81C" android:strokeWidth="10" android:strokeLineCap="round" android:pathData="M320 214 V186" />
+        <path android:fillColor="#F0B81C" android:pathData="M303,176a17,17 0,1 0,34 0a17,17 0,1 0,-34 0" />
+        <path android:strokeColor="#F0B81C" android:strokeWidth="24" android:strokeLineCap="round" android:pathData="M285 138 A52 52 0 0 1 355 138 M254 104 A98 98 0 0 1 386 104 M224 69 A144 144 0 0 1 416 69" />
+    </group>
 </vector>

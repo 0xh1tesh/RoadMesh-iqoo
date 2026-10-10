@@ -44,5 +44,10 @@ class HazardOutput(context: Context, private val report: (String) -> Unit) {
         val result = tts.speak(effect.kind.speech, TextToSpeech.QUEUE_FLUSH, null, effect.frame.id.toString())
         report(if (result == TextToSpeech.SUCCESS) "speech queued locally" else "speech queue rejected")
     }
+    /** A follow-up line (the co-pilot's explanation), queued after any caution that is still speaking. */
+    fun say(text: String) {
+        if (!ready || text.isBlank()) return
+        tts.speak(text, TextToSpeech.QUEUE_ADD, null, "copilot-${android.os.SystemClock.elapsedRealtime()}")
+    }
     fun close() { closed = true; ready = false; pending = null; tts.stop(); tts.shutdown(); vibrator.cancel() }
 }

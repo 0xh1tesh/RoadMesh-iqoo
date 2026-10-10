@@ -14,6 +14,7 @@ The original larger roadmap is preserved in [archive/implementation-plan-researc
 - Added validated JSON profiles, retained logs/counters and Downloads export. Road mode requires live GNSS and rejects synthetic/demo/replay inputs.
 - Improved scene lifecycle, landscape fallback rotation, brake lamps, optional detector status and exact-frame dataset capture.
 - Fixed the scene protocol's old-sequence replay/reset bug; added session nonce compatibility, bounded replay/peer state and tests.
+- Experimental junction layer in `core/junction/` (not wired into the app): Reserve-then-Roll slot scheduler with exit tokens, approach speed law, exact lane belief fusion, ego tracker and handover state machine, checked by a single-junction simulation. See [junction-node.md](junction-node.md).
 
 ## Automated validation
 
