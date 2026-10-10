@@ -135,3 +135,29 @@ UNRESPONSIVE ──────────────▶ ALERTING (short windo
   - three phones in Stage: A gets drowsy (a team member closes their eyes and does not respond), so after the window B relays and C speaks. If A taps "I'm awake" within the window, nobody hears an SOS.
 - **False alarm check:** 15 minutes of normal passenger driving with a log of alarms. Report the count; we have none measured yet.
 - **Rules carried over from the storyboard:** no "brake now" screen; no NPU claim; no measured latency unless measured.
+
+## 6. Status, 11 Oct 2026 (branch `feat/dashcam-prototype`)
+
+| Step | State | Notes |
+|---|---|---|
+| 0 Merge main | Done (`775ea14`) | Four conflicts resolved. Core and app tests pass. |
+| 1 DriverEscalation | Done | 12 tests. Also fixed `DriverWatch`: an awake driver now ends an episode while old closures still fill the PERCLOS window, and `acknowledge()` keeps closure timers so a driver who taps in their sleep is alarmed again on the next sample. |
+| 2 Mesh semantics | Done | `DRIVER_SOS` is Caution, 10 s lifetime, spoken once per sender per 30 s, also relevant to an oncoming vehicle within 300 m (sender ahead and heading back at us). New `DRIVER_OK` (ETSI 93, private sub-cause 100, `HazardUse.CANCEL`) withdraws it from the road map. 10 mesh tests. |
+| 3 MediaPipe Face Landmarker | Done in code, **not yet run on the phone** | `tasks-vision` 0.10.32 (same train as the co-pilot `tasks-genai`), `face_landmarker.task` bundled (3.76 MB), ML Kit kept as fallback behind `FaceSource`. Yawns are counted (jaw open 0.6 for 1.5 s) and shown, but do not raise an alarm. APK grew from 175 MB to 200 MB. |
+| 4 Concurrent cameras | Probe added, **result not measured** | Setup check now reports "Front and back camera at once". The dual pipeline is not built: run the probe on the iQOO 15 first, then record the answer in `docs/decisions/`. |
+| 5 Alarm UX | Done in code | Tap anywhere, a volume key, or looking up with eyes open all answer the alarm; countdown to the SOS is shown. Volume-key handling in a Compose dialog is untested on a device. |
+| 6 Fog mode | Rules done, **app wiring not done** | `FogWatch` (core, 8 tests) turns peers' speed and distance into "slow or stopped vehicle ahead". At 70 km/h it warns at about 130 m against 50 m visibility. Still missing: the fog switch, a steady presence beacon, and speaking the warning. Visibility is assumed, not measured. |
+| 7 Film scene | Not started | |
+
+### Where the build differs from the plan above
+- **No episode id on air.** Every beacon is a normal new message from the sender. Receivers group by sender, and `DRIVER_OK` removes that sender's SOS. This needed no wire change.
+- **Head pitch comes from the landmarks** (forehead against chin depth), not the transformation matrix, so the sign is fixed in code rather than depending on a matrix convention. It is relative to a 2 s calibration, and its accuracy is unmeasured.
+- **Eye open = 1 minus the eyeBlink blendshape.** The eye aspect ratio cross-check was not added.
+- **Model card limit.** The Blendshape V2 model card says the model is not intended for life-critical decisions. We use it only to raise a Caution, never an urgent warning.
+- **Cooldown.** At most one SOS episode per 60 s, except that an unresponsive driver always goes out.
+- **Stopping the monitor mid-SOS does not send DRIVER_OK.** Whether the driver recovered is unknown, so the SOS lapses after 10 s.
+
+### Still to do before claiming anything on stage
+1. Run on the phone: fps, thermals over 10 minutes, eyes-closed and head-drop thresholds, night and sunglasses behaviour.
+2. 15 minutes of normal driving with an alarm log to count false alarms.
+3. Look up the MoRTH "Road Accidents in India" fog figure before quoting it.
