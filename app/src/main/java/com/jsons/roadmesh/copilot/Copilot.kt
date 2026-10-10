@@ -4,13 +4,14 @@ import android.content.Context
 import android.net.Uri
 import android.os.SystemClock
 import com.google.mediapipe.tasks.genai.llminference.LlmInference
+import com.jsons.roadmesh.core.insight.ExplanationGuard
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import java.io.File
 
-/** One co-pilot answer. [done] is false while tokens are still streaming in. */
+/** One co-pilot answer. Prose is exposed only after completion and language checks. */
 data class CopilotLine(val tag: String, val text: String, val done: Boolean, val ms: Long? = null)
 
 data class CopilotState(
@@ -29,15 +30,15 @@ data class CopilotState(
     val ready get() = status == Status.READY || status == Status.THINKING
 }
 
-/** Spoken questions first, then warnings, then background scene commentary. */
-enum class Priority { SCENE, EVENT, QUESTION }
+/** Fresh event explanations take precedence over optional questions and scene commentary. */
+enum class Priority { SCENE, QUESTION, EVENT }
 
 /** "a car", "an auto-rickshaw": the article the co-pilot's facts and training data both use. */
 fun withArticle(word: String) = (if (word.firstOrNull()?.lowercaseChar() in setOf('a', 'e', 'i', 'o', 'u')) "an " else "a ") + word
 
 /**
  * On-device co-pilot: Gemma 2B (MediaPipe LLM Inference, CPU, int4) turns structured facts (YOLO detections, a mesh
- * warning and this node's own inference, the combined road picture) into a short answer, streamed token by token. It
+ * warning and this node's own inference, the combined road picture) into a short, checked answer. It
  * prefers the RESILANE fine-tune (tools/copilot) and falls back to stock Gemma 2B-it. It is never on the alert path:
  * the mesh speaks a caution first; a co-pilot line arrives later or not at all. Every finished answer passes a guard:
  * filler openers are cut, and an answer that calls something safe or uses a number absent from the facts is replaced by
@@ -49,7 +50,8 @@ class Copilot(private val context: Context) {
     private val worker = Dispatchers.Default.limitedParallelism(1)
     private val scope = CoroutineScope(SupervisorJob() + worker)
     private var engine: LlmInference? = null
-    private class Request(val tag: String, val prompt: String, val facts: String, val fallback: String?, val priority: Priority, val done: ((String) -> Unit)?)
+    private class Request(val tag: String, val prompt: String, val facts: String, val fallback: String?, val priority: Priority,
+                        val expiresAtMs: Long, val done: ((String) -> Unit)?)
     private val waiting = sortedMapOf<Priority, Request>(compareByDescending { it })
     private var running = false
 
@@ -120,8 +122,9 @@ class Copilot(private val context: Context) {
      */
     fun ask(tag: String, facts: String, priority: Priority, task: String = DEFAULT_TASK, fallback: String? = null, done: ((String) -> Unit)? = null): Boolean {
         if (engine == null) return false
+        val expires = SystemClock.elapsedRealtime() + when (priority) { Priority.EVENT -> 6_000L; Priority.SCENE -> 8_000L; Priority.QUESTION -> 15_000L }
         scope.launch {
-            waiting[priority] = Request(tag, prompt(task, facts), facts, fallback, priority, done)
+            waiting[priority] = Request(tag, prompt(task, facts), facts, fallback, priority, expires, done)
             pump()
         }
         return true
@@ -134,29 +137,33 @@ class Copilot(private val context: Context) {
 
     private fun pump() {
         val llm = engine ?: return
+        waiting.entries.removeAll { it.value.expiresAtMs <= SystemClock.elapsedRealtime() }
         if (running || waiting.isEmpty()) return
         val next = waiting.remove(waiting.firstKey())!!
         running = true
         state.update { it.copy(status = CopilotState.Status.THINKING) }
         val started = SystemClock.elapsedRealtime()
-        val text = StringBuilder()
         publish(CopilotLine(next.tag, "", false), next.priority)
-        val future = llm.generateResponseAsync(next.prompt) { partial, finished ->
-            scope.launch {
-                text.append(partial)
-                publish(CopilotLine(next.tag, clean(text.toString(), finished), finished, if (finished) SystemClock.elapsedRealtime() - started else null), next.priority)
-            }
+        // Unguarded streaming tokens must never appear in a driving instruction.
+        val future = try { llm.generateResponseAsync(next.prompt) { _, _ -> } }
+        catch (e: Exception) {
+            publish(CopilotLine(next.tag, next.fallback ?: ExplanationGuard.UNKNOWN, true), next.priority)
+            state.update { it.copy(status = CopilotState.Status.READY) }
+            running = false
+            pump()
+            return
         }
         future.addListener({
             scope.launch {
-                val raw = clean(runCatching { future.get() }.getOrElse { e -> text.ifEmpty { "(co-pilot error: ${e.message?.take(80)})" }.toString() }, true)
-                val final = guard(raw, next.facts, next.fallback)
+                val raw = clean(runCatching { future.get() }.getOrDefault(""), true)
+                val final = ExplanationGuard.apply(raw, next.facts, next.fallback)
                 if (final != raw) state.update { it.copy(guarded = it.guarded + 1) }
                 val ms = SystemClock.elapsedRealtime() - started
-                publish(CopilotLine(next.tag, final, true, ms), next.priority)
+                val fresh = SystemClock.elapsedRealtime() < next.expiresAtMs
+                publish(CopilotLine(next.tag, if (fresh) final else "Explanation expired; use the current observations.", true, ms), next.priority)
                 state.update { it.copy(status = CopilotState.Status.READY, calls = it.calls + 1) }
                 running = false
-                next.done?.let { cb -> withContext(Dispatchers.Main) { cb(final) } }
+                if (fresh) next.done?.let { cb -> withContext(Dispatchers.Main) { cb(final) } }
                 pump()
             }
         }, Runnable::run)
@@ -180,20 +187,11 @@ class Copilot(private val context: Context) {
         return sentences.take(2).joinToString(" ").take(260)
     }
 
-    /** The deterministic text wins over an answer that invents numbers or calls something safe. */
-    private fun guard(answer: String, facts: String, fallback: String?): String {
-        if (answer.isBlank()) return fallback ?: answer
-        val known = Regex("\\d+").findAll(facts).map { it.value }.toSet()
-        val invented = Regex("\\d+").findAll(answer).any { it.value !in known }
-        val unsafe = Regex("\\bsafe to\\b|\\bit is safe\\b|\\bit's safe\\b", RegexOption.IGNORE_CASE).containsMatchIn(answer)
-        return if ((invented || unsafe) && fallback != null) fallback else answer
-    }
-
     companion object {
         const val MODEL = "gemma-2b-it-cpu-int4.bin"
         /** The RESILANE fine-tune from tools/copilot/finetune_kaggle.py. Preferred when present. */
         const val TUNED = "gemma-2b-it-resilane-cpu-int4.bin"
-        const val DEFAULT_TASK = "Tell the driver what is happening and what to do, in one sentence of at most 22 words."
+        const val DEFAULT_TASK = "Explain the available observation in at most 22 words. Preserve uncertainty. Do not give a driving manoeuvre."
         const val TASK_SCENE = "Describe what the camera sees and what to watch, in one sentence of at most 22 words."
         const val TASK_ROAD = "Summarise the road for the driver in at most two short sentences, nearest hazard first, keeping every number exactly."
         const val TASK_REPORT = "Tell the driver in one short sentence what was logged for the traffic police."

@@ -5,6 +5,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.os.Environment
 import android.provider.MediaStore
+import android.util.Log
 import com.jsons.roadmesh.core.insight.title
 import com.jsons.roadmesh.core.mesh.HazardKind
 import com.jsons.roadmesh.service.saveDownload
@@ -15,6 +16,10 @@ import kotlinx.coroutines.flow.update
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.util.UUID
 
 /**
  * A road report: a pothole, accident or violation this phone's camera found (with a snapshot), or one it heard from the
@@ -27,27 +32,60 @@ data class RoadReport(
 
 /** Persistent list of reports in app storage, newest first, with JSON/CSV export to Downloads/RESILANE. */
 class ReportLog(private val context: Context) {
-    private val dir = File(context.filesDir, "reports").apply { mkdirs() }
+    private val dir = File(context.filesDir, "reports").apply { runCatching { mkdirs() } }
     private val index = File(dir, "reports.json")
     private val io = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
+    private val pendingLock = Any()
+    private val pendingWrites = HashSet<Job>()
     private val state = MutableStateFlow(load())
     val flow = state.asStateFlow()
 
+    init { writeLater { persistAndPrune() } }
+
     /** Records a report; [frame] (if any) is copied and saved as a JPEG snapshot off the calling thread. */
     fun add(kind: HazardKind, reason: String, confidence: Double?, lat: Double?, lon: Double?, synthetic: Boolean, frame: Bitmap?, sent: Boolean, source: String, fromMesh: Boolean = false) {
-        val id = "${System.currentTimeMillis()}-${kind.name.lowercase()}"
-        val copy = frame?.copy(Bitmap.Config.ARGB_8888, false)
+        val id = "${System.currentTimeMillis()}-${UUID.randomUUID()}-${kind.name.lowercase()}"
+        val copy = runCatching { frame?.copy(Bitmap.Config.ARGB_8888, false) }
+            .onFailure { Log.w("RoadMeshReports", "Snapshot copy unavailable", it) }.getOrNull()
         val report = RoadReport(id, kind, System.currentTimeMillis(), lat, lon, synthetic, reason, confidence, copy?.let { "$id.jpg" }, fromMesh, sent, source)
         state.update { (listOf(report) + it).take(MAX) }
-        io.launch {
-            copy?.let { bmp -> File(dir, "$id.jpg").outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 82, it) }; bmp.recycle() }
-            save()
+        writeLater {
+            try {
+                // A rapid burst may have evicted this report before its write starts; do not create an orphan.
+                if (copy != null && state.value.any { it.id == id }) {
+                    File(dir, "$id.jpg").outputStream().use {
+                        check(copy.compress(Bitmap.CompressFormat.JPEG, 82, it)) { "JPEG compression failed" }
+                    }
+                }
+            } catch (e: Exception) {
+                state.update { rows -> rows.map { if (it.id == id) it.copy(snapshot = null) else it } }
+                Log.w("RoadMeshReports", "Snapshot could not be saved", e)
+            } finally {
+                copy?.recycle()
+                persistAndPrune()
+            }
         }
     }
 
-    fun snapshot(r: RoadReport): File? = r.snapshot?.let { File(dir, it) }?.takeIf { it.exists() }
+    fun snapshot(r: RoadReport): File? = r.snapshot?.let(::snapshotFile)?.takeIf { it.isFile }
 
-    fun clear() { state.value = emptyList(); io.launch { dir.listFiles()?.forEach { it.delete() } } }
+    fun clear() { state.value = emptyList(); writeLater { persistAndPrune() } }
+
+    /** Join actual writes rather than assuming that a newly scheduled empty job is a dispatcher FIFO barrier. */
+    internal suspend fun awaitPendingWrites() {
+        while (true) {
+            val pending = synchronized(pendingLock) { pendingWrites.toList() }
+            if (pending.isEmpty()) return
+            pending.joinAll()
+        }
+    }
+
+    private fun writeLater(block: () -> Unit) {
+        val job = io.launch(start = CoroutineStart.LAZY) { block() }
+        synchronized(pendingLock) { pendingWrites += job }
+        job.invokeOnCompletion { synchronized(pendingLock) { pendingWrites -= job } }
+        job.start()
+    }
 
     /** Writes reports.json, reports.csv and every snapshot to Downloads/RESILANE/reports. Returns where they went. */
     suspend fun export(): String = withContext(Dispatchers.IO) {
@@ -79,11 +117,36 @@ class ReportLog(private val context: Context) {
         put("fromMesh", fromMesh); put("sentToMesh", sentToMesh); put("source", source)
     }
 
-    private fun save() { index.writeText(JSONArray(state.value.map { it.json() }).toString()) }
+    private fun save() {
+        val pending = File(dir, "reports.json.pending")
+        try {
+            pending.outputStream().use { output ->
+                output.write(JSONArray(state.value.map { it.json() }).toString().toByteArray(Charsets.UTF_8))
+                output.fd.sync()
+            }
+            try {
+                Files.move(pending.toPath(), index.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+            } catch (_: AtomicMoveNotSupportedException) {
+                // Some storage providers cannot rename atomically; replacement still reports failures to our caller.
+                Files.move(pending.toPath(), index.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
+        } finally { if (pending.exists()) pending.delete() }
+    }
+
+    private fun snapshotFile(name: String): File? = if (File(name).name == name && name.endsWith(".jpg", ignoreCase = true)) File(dir, name) else null
+
+    private fun persistAndPrune() {
+        runCatching {
+            val retained = state.value.mapNotNull { it.snapshot }.toSet()
+            dir.listFiles()?.filter { it.isFile && it.extension.equals("jpg", ignoreCase = true) && it.name !in retained }
+                ?.forEach { file -> if (!file.delete()) Log.w("RoadMeshReports", "Could not remove expired snapshot") }
+            save()
+        }.onFailure { Log.w("RoadMeshReports", "Report storage unavailable; observation continues", it) }
+    }
 
     private fun load(): List<RoadReport> = runCatching {
         val a = JSONArray(index.readText())
-        List(a.length()) { i ->
+        List(minOf(a.length(), MAX)) { i ->
             val o = a.getJSONObject(i)
             RoadReport(o.getString("id"), HazardKind.valueOf(o.getString("kind")), o.getLong("utcMs"), o.optDouble("lat").takeIf { !it.isNaN() },
                 o.optDouble("lon").takeIf { !it.isNaN() }, o.optBoolean("synthetic"), o.optString("reason"), o.optDouble("confidence").takeIf { !it.isNaN() },

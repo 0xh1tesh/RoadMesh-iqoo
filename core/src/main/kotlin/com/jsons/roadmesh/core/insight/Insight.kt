@@ -14,7 +14,7 @@ data class NodeInference(val kind: HazardKind, val hazardAheadM: Int, val etaS: 
     fun facts(fromLetter: Char, viaLetter: Char?) = buildString {
         append("${kind.title()} reported by phone $fromLetter")
         origin?.vehicle?.takeIf { it != VehicleType.UNKNOWN }?.let { append(" (a ${it.title})") }
-        origin?.rangeM?.let { append(", whose camera saw it about $it m in front of it") }
+        origin?.rangeM?.let { append(", reported about $it m from its position") }
         origin?.confidence?.let { append(" with ${(it * 100).roundToInt()}% detector confidence") }
         if (viaLetter != null && viaLetter != fromLetter) append(", relayed by phone $viaLetter")
         append(". From here the hazard is about $hazardAheadM m ahead")
@@ -30,10 +30,11 @@ data class NodeInference(val kind: HazardKind, val hazardAheadM: Int, val etaS: 
             val action = when (kind) {
                 HazardKind.PEDESTRIAN -> if (soon) "slow down now and be ready to stop" else "ease off and watch for people on the road"
                 HazardKind.BRAKING -> if (soon) "brake gently and open the gap to the car ahead" else "ease off early so you don't have to brake hard"
-                HazardKind.VEHICLE_CLOSE -> if (soon) "hold your lane and leave room, a vehicle cut in ahead" else "expect a sudden lane change ahead"
-                HazardKind.POTHOLE -> if (soon) "slow to about 20 km/h and watch the road surface" else "expect a pothole; slow down before you reach it"
-                HazardKind.ACCIDENT -> if (soon) "slow down now, a lane may be blocked and people may be on the road" else "slow down early and be ready to change lanes"
-                HazardKind.SLOWDOWN -> if (soon) "ease off now so you reach the queue after it moves" else "ease off early; a slowdown is moving back toward you"
+                HazardKind.VEHICLE_CLOSE -> "watch the gap ahead; the cause of relative approach is unknown"
+                HazardKind.POTHOLE -> "watch the road surface and prepare to slow smoothly"
+                HazardKind.ACCIDENT -> "prepare to slow; the road may be blocked and people may be nearby"
+                HazardKind.SLOWDOWN -> "prepare for slower traffic ahead; the queue may persist"
+                HazardKind.ROAD_NARROWED -> "prepare to slow and watch for opposing traffic; passage priority is unknown"
                 HazardKind.WRONG_WAY -> if (soon) "keep left and be ready to stop, a vehicle is coming the wrong way" else "keep left; a vehicle is on the wrong side ahead"
                 HazardKind.DRIVER_SOS -> if (soon) "slow down now and keep clear, that driver may drift or stop suddenly; stop to help only if it is safe" else "slow down early; a driver ahead may be asleep or unconscious"
                 HazardKind.TRIPLE_RIDING, HazardKind.NO_HELMET, HazardKind.RED_LIGHT -> "no action needed; it was logged for the traffic police"
@@ -55,4 +56,5 @@ fun HazardKind.title() = when (this) {
     HazardKind.TRIPLE_RIDING -> "Triple riding"
     HazardKind.NO_HELMET -> "Rider without helmet"
     HazardKind.RED_LIGHT -> "Red light jumped"
+    HazardKind.ROAD_NARROWED -> "Road narrowed"
 }

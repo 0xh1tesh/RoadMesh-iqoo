@@ -1,0 +1,2816 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RoadMesh Junction Lab — SUMO Policy Results Viewer</title>
+  <!-- Embedded data hook for standalone report generation (CONTRACT v1) -->
+  <script id="junction-data" type="application/json"></script>
+  <style>
+    :root {
+      --bg-base: #0b0f17;
+      --bg-surface: #131924;
+      --bg-surface-alt: #1a2232;
+      --bg-panel: #111622;
+      --border-color: #222c3e;
+      --border-color-focus: #3b82f6;
+      --text-main: #f1f5f9;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
+      --accent-no-advice: #94a3b8;
+      --accent-local-only: #f59e0b;
+      --accent-mesh: #06b6d4;
+      --color-equipped: #38bdf8;
+      --color-unequipped: #64748b;
+      --color-warn: #ef4444;
+      --color-warn-bg: rgba(239, 68, 68, 0.15);
+      --color-stopped: #dc2626;
+      --color-relay: #a855f7;
+      --road-surface: #151922;
+      --road-border: #283244;
+      --road-marking: #3b4559;
+      --junction-box: rgba(245, 158, 11, 0.15);
+      --junction-border: #f59e0b;
+      --queue-highlight: rgba(239, 68, 68, 0.35);
+      --radius-sm: 4px;
+      --radius-md: 8px;
+      --radius-lg: 12px;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --font-mono: "JetBrains Mono", "SF Mono", Consolas, Menlo, monospace;
+    }
+
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-base);
+      color: var(--text-main);
+      font-family: var(--font-sans);
+      font-size: 14px;
+      line-height: 1.5;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Accessibility / Reduced Motion */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+      }
+    }
+    body.reduced-motion *, body.reduced-motion *::before, body.reduced-motion *::after {
+      animation: none !important;
+      transition: none !important;
+    }
+
+    header.app-header {
+      background-color: var(--bg-surface);
+      border-bottom: 1px solid var(--border-color);
+      padding: 12px 20px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .brand-title {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-title h1 {
+      font-size: 17px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      color: var(--text-main);
+    }
+
+    .badge-contract {
+      font-size: 11px;
+      font-family: var(--font-mono);
+      padding: 2px 7px;
+      border-radius: var(--radius-sm);
+      background: var(--bg-surface-alt);
+      border: 1px solid var(--border-color);
+      color: var(--accent-mesh);
+    }
+
+    .header-controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 500;
+      padding: 6px 14px;
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border-color);
+      background-color: var(--bg-surface-alt);
+      color: var(--text-main);
+      cursor: pointer;
+      user-select: none;
+      transition: background-color 0.15s ease, border-color 0.15s ease;
+    }
+    .btn:hover:not(:disabled) {
+      background-color: #242e42;
+      border-color: #3b475e;
+    }
+    .btn:active:not(:disabled) {
+      background-color: #1e2637;
+    }
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .btn-primary {
+      background-color: #2563eb;
+      border-color: #3b82f6;
+      color: #ffffff;
+    }
+    .btn-primary:hover:not(:disabled) {
+      background-color: #1d4ed8;
+      border-color: #2563eb;
+    }
+
+    .form-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .form-label {
+      font-size: 12px;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    .form-select {
+      font-family: inherit;
+      font-size: 13px;
+      background-color: var(--bg-surface-alt);
+      color: var(--text-main);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      padding: 6px 10px;
+      outline: none;
+      cursor: pointer;
+    }
+    .form-select:focus {
+      border-color: var(--border-color-focus);
+    }
+
+    /* Notification / Status bar */
+    .notice-bar {
+      padding: 10px 20px;
+      background-color: var(--bg-surface);
+      border-bottom: 1px solid var(--border-color);
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .notice-bar.info {
+      background-color: rgba(59, 130, 246, 0.08);
+      border-color: rgba(59, 130, 246, 0.25);
+      color: #93c5fd;
+    }
+    .notice-bar.warn {
+      background-color: rgba(245, 158, 11, 0.08);
+      border-color: rgba(245, 158, 11, 0.25);
+      color: #fcd34d;
+    }
+    .notice-bar.error {
+      background-color: rgba(239, 68, 68, 0.08);
+      border-color: rgba(239, 68, 68, 0.25);
+      color: #fca5a5;
+    }
+    .notice-close {
+      cursor: pointer;
+      background: none;
+      border: none;
+      color: inherit;
+      font-size: 16px;
+      padding: 0 4px;
+    }
+
+    /* Timeline & Playback Controller */
+    .timeline-controller {
+      background-color: var(--bg-surface);
+      border-bottom: 1px solid var(--border-color);
+      padding: 12px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+
+    .playback-main {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .playback-buttons {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .time-display {
+      font-family: var(--font-mono);
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-main);
+      min-width: 190px;
+      padding: 4px 10px;
+      background: var(--bg-surface-alt);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      text-align: center;
+    }
+
+    .scrubber-container {
+      flex: 1;
+      min-width: 220px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .time-slider {
+      flex: 1;
+      height: 7px;
+      -webkit-appearance: none;
+      appearance: none;
+      background: var(--bg-surface-alt);
+      border-radius: 4px;
+      outline: none;
+      border: 1px solid var(--border-color);
+      cursor: pointer;
+    }
+    .time-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: var(--border-color-focus);
+      border: 2px solid #ffffff;
+      cursor: pointer;
+      box-shadow: 0 0 6px rgba(59, 130, 246, 0.5);
+    }
+    .time-slider::-moz-range-thumb {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: var(--border-color-focus);
+      border: 2px solid #ffffff;
+      cursor: pointer;
+      box-shadow: 0 0 6px rgba(59, 130, 246, 0.5);
+    }
+
+    .playback-options {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .form-check {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      color: var(--text-muted);
+      user-select: none;
+    }
+    .form-check input[type="checkbox"] {
+      cursor: pointer;
+      accent-color: var(--border-color-focus);
+    }
+
+    /* Main Content Area */
+    main.app-body {
+      flex: 1;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      max-width: 1800px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    /* Disclaimers & Assumptions Alert */
+    .assumption-banner {
+      background-color: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      border-left: 4px solid var(--accent-mesh);
+      border-radius: var(--radius-md);
+      padding: 12px 18px;
+      font-size: 13px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .assumption-banner-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      font-weight: 600;
+      color: var(--text-main);
+    }
+    .assumption-banner-content {
+      color: var(--text-muted);
+      line-height: 1.45;
+    }
+
+    /* Three Synchronized Panels Grid */
+    .panels-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+      align-items: stretch;
+    }
+
+    @media (max-width: 1100px) {
+      .panels-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .road-panel {
+      background-color: var(--bg-panel);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-lg);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+    }
+
+    .road-panel.panel-no-advice {
+      border-top: 4px solid var(--accent-no-advice);
+    }
+    .road-panel.panel-local-only {
+      border-top: 4px solid var(--accent-local-only);
+    }
+    .road-panel.panel-mesh-informed {
+      border-top: 4px solid var(--accent-mesh);
+    }
+
+    .panel-header {
+      padding: 12px 16px;
+      background-color: var(--bg-surface);
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .panel-title-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .policy-pill {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      padding: 3px 8px;
+      border-radius: var(--radius-sm);
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .policy-pill.no_advice {
+      background: rgba(148, 163, 184, 0.15);
+      color: var(--accent-no-advice);
+      border: 1px solid rgba(148, 163, 184, 0.3);
+    }
+    .policy-pill.local_only {
+      background: rgba(245, 158, 11, 0.15);
+      color: var(--accent-local-only);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+    }
+    .policy-pill.mesh_informed {
+      background: rgba(6, 182, 212, 0.15);
+      color: var(--accent-mesh);
+      border: 1px solid rgba(6, 182, 212, 0.3);
+    }
+
+    .policy-desc {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .panel-live-metrics {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+      padding: 8px 16px;
+      background-color: rgba(0, 0, 0, 0.2);
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .live-metric-card {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .live-metric-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      color: var(--text-dim);
+    }
+    .live-metric-val {
+      font-family: var(--font-mono);
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-main);
+    }
+    .live-metric-val.alert {
+      color: var(--color-warn);
+    }
+
+    /* SVG Canvas Area */
+    .road-canvas-container {
+      position: relative;
+      background-color: #0c0f16;
+      width: 100%;
+      height: 220px;
+      overflow: hidden;
+      cursor: crosshair;
+    }
+
+    .road-svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    .canvas-hud {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(4px);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      padding: 4px 8px;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+      pointer-events: none;
+    }
+
+    .queue-extent-banner {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      background: rgba(239, 68, 68, 0.2);
+      border: 1px solid var(--color-warn);
+      border-radius: var(--radius-sm);
+      padding: 3px 8px;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: #fca5a5;
+      display: none;
+    }
+    .queue-extent-banner.active {
+      display: block;
+    }
+
+    /* Tooltip */
+    .road-tooltip {
+      position: absolute;
+      z-index: 100;
+      pointer-events: none;
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid var(--border-color-focus);
+      border-radius: var(--radius-md);
+      padding: 8px 12px;
+      font-size: 12px;
+      color: var(--text-main);
+      box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+      display: none;
+      max-width: 280px;
+      line-height: 1.4;
+    }
+
+    /* Panel Footer Preview */
+    .panel-footer {
+      padding: 10px 16px;
+      background-color: var(--bg-surface);
+      border-top: 1px solid var(--border-color);
+      font-size: 12px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    /* Visual Legend */
+    .legend-bar {
+      background-color: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      padding: 10px 16px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 16px 24px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .legend-swatch {
+      width: 12px;
+      height: 12px;
+      border-radius: 2px;
+      display: inline-block;
+    }
+
+    /* Tabs & Details Section */
+    .details-card {
+      background-color: var(--bg-panel);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+    }
+
+    .tabs-header {
+      display: flex;
+      flex-wrap: wrap;
+      background-color: var(--bg-surface);
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .tab-btn {
+      padding: 12px 20px;
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-muted);
+      background: none;
+      border: none;
+      border-bottom: 3px solid transparent;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .tab-btn:hover {
+      color: var(--text-main);
+    }
+    .tab-btn.active {
+      color: var(--border-color-focus);
+      border-bottom-color: var(--border-color-focus);
+      background: rgba(59, 130, 246, 0.05);
+    }
+
+    .tab-pane {
+      display: none;
+      padding: 20px;
+    }
+    .tab-pane.active {
+      display: block;
+    }
+
+    /* Tables */
+    .data-table-container {
+      width: 100%;
+      overflow-x: auto;
+    }
+
+    table.data-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      text-align: left;
+    }
+
+    table.data-table th, table.data-table td {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    table.data-table th {
+      background-color: var(--bg-surface-alt);
+      color: var(--text-muted);
+      font-weight: 600;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    table.data-table tr:hover td {
+      background-color: rgba(255, 255, 255, 0.02);
+    }
+
+    .num-cell {
+      font-family: var(--font-mono);
+      text-align: right;
+    }
+
+    .tag-channel {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 6px;
+      border-radius: var(--radius-sm);
+      text-transform: uppercase;
+    }
+    .tag-channel.local {
+      background: rgba(245, 158, 11, 0.2);
+      color: #fbbf24;
+    }
+    .tag-channel.mesh {
+      background: rgba(6, 182, 212, 0.2);
+      color: #67e8f9;
+    }
+
+    /* Vehicle Inspector Detail Box */
+    .inspector-card {
+      background-color: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      padding: 16px;
+      margin-bottom: 20px;
+    }
+
+    .inspector-title {
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .inspector-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    @media (max-width: 850px) {
+      .inspector-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .inspector-col {
+      background: var(--bg-panel);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      padding: 10px 14px;
+      font-size: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    /* Empty / Dropzone state */
+    .dropzone-overlay {
+      border: 2px dashed var(--border-color);
+      border-radius: var(--radius-lg);
+      padding: 50px 20px;
+      text-align: center;
+      background-color: rgba(19, 25, 36, 0.6);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      margin: 20px 0;
+    }
+    .dropzone-overlay.drag-over {
+      border-color: var(--border-color-focus);
+      background-color: rgba(59, 130, 246, 0.08);
+    }
+    .dropzone-icon {
+      font-size: 42px;
+      color: var(--text-dim);
+    }
+    .dropzone-text h3 {
+      font-size: 18px;
+      margin-bottom: 6px;
+    }
+    .dropzone-text p {
+      color: var(--text-muted);
+      font-size: 13px;
+      max-width: 500px;
+      margin: 0 auto;
+    }
+
+    /* Footer */
+    footer.app-footer {
+      background-color: var(--bg-surface);
+      border-top: 1px solid var(--border-color);
+      padding: 14px 20px;
+      font-size: 12px;
+      color: var(--text-dim);
+      text-align: center;
+      margin-top: auto;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Navigation & Controls Header -->
+  <header class="app-header">
+    <div class="brand-title">
+      <h1>RoadMesh Junction Lab</h1>
+      <span class="badge-contract">SIMULATION</span>
+      <span id="active-file-pill" class="badge-contract" style="color:var(--text-muted); display:none;"></span>
+    </div>
+
+    <div class="header-controls">
+      <!-- Hidden file input for file:// and local uploads -->
+      <input type="file" id="file-picker" accept=".json,application/json" style="display:none;" />
+      <button class="btn btn-primary" id="btn-browse-file" type="button">
+        <span>📂</span> Load Results JSON
+      </button>
+
+      <button class="btn" id="btn-reload-sample" type="button" title="Fetch sample-results.json adjacent to viewer">
+        <span>⟳</span> Auto-load sample
+      </button>
+
+      <div class="form-group">
+        <label class="form-label" for="seed-select">Seed:</label>
+        <select class="form-select" id="seed-select" disabled>
+          <option value="">No dataset loaded</option>
+        </select>
+      </div>
+
+      <div class="form-check" title="Toggle reduced motion rendering">
+        <input type="checkbox" id="reduced-motion-toggle">
+        <label for="reduced-motion-toggle">Reduced motion</label>
+      </div>
+    </div>
+  </header>
+
+  <!-- Notification / Alert Bar -->
+  <div id="notice-container" style="display:none;"></div>
+
+  <!-- Playback Scrubber & Time Controller -->
+  <div class="timeline-controller">
+    <div class="playback-main">
+      <div class="playback-buttons">
+        <button class="btn" id="btn-play-pause" type="button" disabled title="Play / Pause (Space)">
+          <span id="play-pause-icon">▶</span> <span id="play-pause-text">Play</span>
+        </button>
+        <button class="btn" id="btn-step-prev" type="button" disabled title="Step back (Left Arrow)">
+          <span>⏮</span> Step
+        </button>
+        <button class="btn" id="btn-step-next" type="button" disabled title="Step forward (Right Arrow)">
+          Step <span>⏭</span>
+        </button>
+        <button class="btn" id="btn-reset-time" type="button" disabled title="Reset to t=0">
+          <span>↺</span>
+        </button>
+      </div>
+
+      <div class="time-display" id="time-display">
+        t = 0.0s / 0.0s
+      </div>
+
+      <div class="scrubber-container">
+        <input type="range" class="time-slider" id="time-slider" min="0" max="0" value="0" disabled aria-label="Simulation time scrubber">
+      </div>
+
+      <div class="playback-options">
+        <div class="form-group">
+          <label class="form-label" for="speed-select">Speed:</label>
+          <select class="form-select" id="speed-select">
+            <option value="0.25">0.25×</option>
+            <option value="0.5">0.5×</option>
+            <option value="1" selected>1.0×</option>
+            <option value="2">2.0×</option>
+            <option value="4">4.0×</option>
+          </select>
+        </div>
+
+        <div class="form-check">
+          <input type="checkbox" id="loop-toggle" checked>
+          <label for="loop-toggle">Loop</label>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main View Area -->
+  <main class="app-body">
+
+    <!-- Scenario Assumptions & Research Integrity Notice -->
+    <section class="assumption-banner" id="scenario-assumptions-banner">
+      <div class="assumption-banner-header">
+        <span id="scenario-title">Scenario: Offline SUMO Policy Evaluation</span>
+        <span style="font-size:11px; font-weight:normal; color:var(--text-dim);">Synthetic Model Study</span>
+      </div>
+      <div class="assumption-banner-content" id="scenario-assumptions-summary">
+        Research harness for three matched SUMO policies: no_advice, local_only, mesh_informed. Values are measured from synthetic simulation runs, not hardware or real-world improvement claims. Communication is modeled logically without BLE radio physics; driver compliance is an assumed model parameter.
+      </div>
+    </section>
+
+    <!-- Drop Zone Placeholder (Visible when no file loaded) -->
+    <div class="dropzone-overlay" id="empty-dropzone">
+      <div class="dropzone-icon">📊</div>
+      <div class="dropzone-text">
+        <h3>Drop Junction Lab Result JSON Here</h3>
+        <p>Drop a <code>sample-results.json</code> or click "Load Results JSON" above to inspect matched SUMO policies offline.</p>
+      </div>
+      <button class="btn btn-primary" id="btn-dropzone-pick" type="button">Select JSON File</button>
+    </div>
+
+    <!-- Three Synchronized Road Panels -->
+    <section class="panels-grid" id="panels-grid" style="display:none;">
+
+      <!-- Panel 1: no_advice -->
+      <article class="road-panel panel-no-advice" id="panel-no-advice">
+        <div class="panel-header">
+          <div class="panel-title-row">
+            <span class="policy-pill no_advice">1. no_advice</span>
+            <span class="policy-desc">Baseline (Unassisted)</span>
+          </div>
+          <div class="policy-desc">Standard SUMO car-following. No cooperative queue advisories issued.</div>
+        </div>
+        <div class="panel-live-metrics">
+          <div class="live-metric-card">
+            <span class="live-metric-label">Active</span>
+            <span class="live-metric-val" id="metric-no-advice-active">0</span>
+          </div>
+          <div class="live-metric-card">
+            <span class="live-metric-label">Queue</span>
+            <span class="live-metric-val" id="metric-no-advice-queue">0.0 m</span>
+          </div>
+          <div class="live-metric-card">
+            <span class="live-metric-label">Arrived</span>
+            <span class="live-metric-val" id="metric-no-advice-arrived">0</span>
+          </div>
+          <div class="live-metric-card">
+            <span class="live-metric-label">Warnings</span>
+            <span class="live-metric-val" id="metric-no-advice-warn">0</span>
+          </div>
+        </div>
+        <div class="road-canvas-container" id="container-no-advice">
+          <svg class="road-svg" id="svg-no-advice" role="img" aria-label="Road visualization for no_advice mode"></svg>
+          <div class="canvas-hud" id="hud-no-advice">no_advice</div>
+          <div class="queue-extent-banner" id="qbanner-no-advice">Queue: 0.0 m</div>
+          <div class="road-tooltip" id="tooltip-no-advice"></div>
+        </div>
+        <div class="panel-footer">
+          <span id="footer-no-advice-delay">Delay: --</span>
+          <span id="footer-no-advice-spill">Spillback: --</span>
+        </div>
+      </article>
+
+      <!-- Panel 2: local_only -->
+      <article class="road-panel panel-local-only" id="panel-local-only">
+        <div class="panel-header">
+          <div class="panel-title-row">
+            <span class="policy-pill local_only">2. local_only</span>
+            <span class="policy-desc">Direct Line-of-Sight</span>
+          </div>
+          <div class="policy-desc">Direct forward sensing only. Rejects multi-hop mesh queue observations.</div>
+        </div>
+        <div class="panel-live-metrics">
+          <div class="live-metric-card">
+            <span class="live-metric-label">Active</span>
+            <span class="live-metric-val" id="metric-local-only-active">0</span>
+          </div>
+          <div class="live-metric-card">
+            <span class="live-metric-label">Queue</span>
+            <span class="live-metric-val" id="metric-local-only-queue">0.0 m</span>
+          </div>
+          <div class="live-metric-card">
+            <span class="live-metric-label">Arrived</span>
+            <span class="live-metric-val" id="metric-local-only-arrived">0</span>
+          </div>
+          <div class="live-metric-card">
+            <span class="live-metric-label">Warnings</span>
+            <span class="live-metric-val" id="metric-local-only-warn">0</span>
+          </div>
+        </div>
+        <div class="road-canvas-container" id="container-local-only">
+          <svg class="road-svg" id="svg-local-only" role="img" aria-label="Road visualization for local_only mode"></svg>
+          <div class="canvas-hud" id="hud-local-only">local_only</div>
+          <div class="queue-extent-banner" id="qbanner-local-only">Queue: 0.0 m</div>
+          <div class="road-tooltip" id="tooltip-local-only"></div>
+        </div>
+        <div class="panel-footer">
+          <span id="footer-local-only-delay">Delay: --</span>
+          <span id="footer-local-only-spill">Spillback: --</span>
+        </div>
+      </article>
+
+      <!-- Panel 3: mesh_informed -->
+      <article class="road-panel panel-mesh-informed" id="panel-mesh-informed">
+        <div class="panel-header">
+          <div class="panel-title-row">
+            <span class="policy-pill mesh_informed">3. mesh_informed</span>
+            <span class="policy-desc">Cooperative Relay</span>
+          </div>
+          <div class="policy-desc">Accepts local direct sensing AND multi-hop mesh queue observations.</div>
+        </div>
+        <div class="panel-live-metrics">
+          <div class="live-metric-card">
+            <span class="live-metric-label">Active</span>
+            <span class="live-metric-val" id="metric-mesh-informed-active">0</span>
+          </div>
+          <div class="live-metric-card">
+            <span class="live-metric-label">Queue</span>
+            <span class="live-metric-val" id="metric-mesh-informed-queue">0.0 m</span>
+          </div>
+          <div class="live-metric-card">
+            <span class="live-metric-label">Arrived</span>
+            <span class="live-metric-val" id="metric-mesh-informed-arrived">0</span>
+          </div>
+          <div class="live-metric-card">
+            <span class="live-metric-label">Warnings</span>
+            <span class="live-metric-val" id="metric-mesh-informed-warn">0</span>
+          </div>
+        </div>
+        <div class="road-canvas-container" id="container-mesh-informed">
+          <svg class="road-svg" id="svg-mesh-informed" role="img" aria-label="Road visualization for mesh_informed mode"></svg>
+          <div class="canvas-hud" id="hud-mesh-informed">mesh_informed</div>
+          <div class="queue-extent-banner" id="qbanner-mesh-informed">Queue: 0.0 m</div>
+          <div class="road-tooltip" id="tooltip-mesh-informed"></div>
+        </div>
+        <div class="panel-footer">
+          <span id="footer-mesh-informed-delay">Delay: --</span>
+          <span id="footer-mesh-informed-spill">Spillback: --</span>
+        </div>
+      </article>
+
+    </section>
+
+    <!-- Visual Legend Bar -->
+    <div class="legend-bar" id="legend-bar" style="display:none;">
+      <div class="legend-item">
+        <span class="legend-swatch" style="background:var(--color-unequipped);"></span>
+        <span>Unequipped Vehicle</span>
+      </div>
+      <div class="legend-item">
+        <span class="legend-swatch" style="background:var(--color-equipped);"></span>
+        <span>Equipped (RoadMesh app)</span>
+      </div>
+      <div class="legend-item">
+        <span class="legend-swatch" style="background:var(--color-warn); border-radius:50%;"></span>
+        <span>Active Queue Caution (▲)</span>
+      </div>
+      <div class="legend-item">
+        <span class="legend-swatch" style="background:var(--accent-local-only); border-radius:50%;"></span>
+        <span>Local Knowledge</span>
+      </div>
+      <div class="legend-item">
+        <span class="legend-swatch" style="background:var(--accent-mesh); border-radius:50%;"></span>
+        <span>Mesh Relayed Knowledge</span>
+      </div>
+      <div class="legend-item">
+        <span class="legend-swatch" style="background:var(--color-stopped);"></span>
+        <span>Stopped / Queued (&le;0.5 m/s)</span>
+      </div>
+      <div class="legend-item">
+        <span class="legend-swatch" style="background:var(--color-relay); border-radius:50%;"></span>
+        <span>Pedestrian Relay Node</span>
+      </div>
+      <div class="legend-item">
+        <span class="legend-swatch" style="background:var(--junction-border); border:1px dashed #ffffff;"></span>
+        <span>Junction Conflict Area</span>
+      </div>
+      <div class="legend-item">
+        <span class="legend-swatch" style="background:var(--queue-highlight); border:1px solid var(--color-warn);"></span>
+        <span>Queue Extent Zone</span>
+      </div>
+    </div>
+
+    <!-- Tabbed Detailed Inspection Area -->
+    <section class="details-card" id="details-card" style="display:none;">
+      <div class="tabs-header">
+        <button class="tab-btn active" data-tab="tab-frame-inspector" type="button">Frame Inspector (t=<span id="tab-time-indicator">0</span>s)</button>
+        <button class="tab-btn" data-tab="tab-metrics-compare" type="button">Seed Policy Comparison</button>
+        <button class="tab-btn" data-tab="tab-dataset-summary" type="button">Multi-Run Summary</button>
+        <button class="tab-btn" data-tab="tab-assumptions" type="button">Assumptions & Disclaimers</button>
+        <button class="tab-btn" data-tab="tab-all-warnings" type="button">All Warnings Log</button>
+      </div>
+
+      <!-- Tab 1: Current Frame Inspector -->
+      <div class="tab-pane active" id="tab-frame-inspector">
+        <!-- Selected Vehicle Inspector -->
+        <div class="inspector-card" id="vehicle-inspector" style="display:none;">
+          <div class="inspector-title">
+            <span>Selected Vehicle: <strong id="insp-veh-id" style="font-family:var(--font-mono); color:var(--color-equipped);">--</strong></span>
+            <button class="btn" id="insp-clear-btn" type="button" style="padding:2px 8px; font-size:11px;">Clear selection</button>
+          </div>
+          <div class="inspector-grid">
+            <div class="inspector-col" id="insp-col-no-advice">
+              <strong>no_advice</strong>
+              <div id="insp-state-no-advice">Not in frame</div>
+            </div>
+            <div class="inspector-col" id="insp-col-local-only">
+              <strong>local_only</strong>
+              <div id="insp-state-local-only">Not in frame</div>
+            </div>
+            <div class="inspector-col" id="insp-col-mesh-informed">
+              <strong>mesh_informed</strong>
+              <div id="insp-state-mesh-informed">Not in frame</div>
+            </div>
+          </div>
+        </div>
+
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px;">
+          <!-- Active Warnings at this second -->
+          <div>
+            <h4 style="margin-bottom:8px; font-size:13px; color:var(--text-main);">
+              Cautions since the previous frame, at t = <span class="active-t-num">0</span> s
+            </h4>
+            <div class="data-table-container">
+              <table class="data-table" id="table-frame-warnings">
+                <thead>
+                  <tr>
+                    <th>Mode</th>
+                    <th>Recipient</th>
+                    <th>Source</th>
+                    <th>Channel</th>
+                    <th class="num-cell">Dist Ahead</th>
+                    <th class="num-cell">Report-position crossing</th>
+                    <th>Eventual response</th>
+                  </tr>
+                </thead>
+                <tbody id="tbody-frame-warnings">
+                  <tr><td colspan="7" style="color:var(--text-dim); text-align:center;">No cautions issued since the preceding frame</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Active Knowledge at this second -->
+          <div>
+            <h4 style="margin-bottom:8px; font-size:13px; color:var(--text-main);">
+              Retained Observations in Vehicle Memory at t = <span class="active-t-num">0</span> s
+            </h4>
+            <div class="data-table-container">
+              <table class="data-table" id="table-frame-knowledge">
+                <thead>
+                  <tr>
+                    <th>Mode</th>
+                    <th>Recipient</th>
+                    <th>Source</th>
+                    <th>Channel</th>
+                    <th class="num-cell">Captured</th>
+                    <th class="num-cell">Expires</th>
+                  </tr>
+                </thead>
+                <tbody id="tbody-frame-knowledge">
+                  <tr><td colspan="6" style="color:var(--text-dim); text-align:center;">No retained observations at this frame</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <p style="margin-top:12px; font-size:11px; color:var(--text-dim);">
+          Note: Knowledge records retain one nearest eligible observation selected per recipient until expiry, not the whole cache or global truth. They describe decentralized local memory, not continuing advisory eligibility or ground-truth oracle knowledge.
+        </p>
+      </div>
+
+      <!-- Tab 2: Matched Policy Comparison Table -->
+      <div class="tab-pane" id="tab-metrics-compare">
+        <h4 style="margin-bottom:12px; font-size:14px;">
+          Matched Run Metrics for Seed <span id="metrics-seed-label">--</span>
+        </h4>
+        <div class="data-table-container">
+          <table class="data-table" id="table-metrics-compare">
+            <thead>
+              <tr>
+                <th>Metric</th>
+                <th>Units / Definition</th>
+                <th class="num-cell" style="color:var(--accent-no-advice);">no_advice</th>
+                <th class="num-cell" style="color:var(--accent-local-only);">local_only</th>
+                <th class="num-cell" style="color:var(--accent-mesh);">mesh_informed</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-metrics-compare"></tbody>
+          </table>
+        </div>
+        <p style="margin-top:12px; font-size:11px; color:var(--text-dim);">
+          Neutral reporting disclaimer: Metrics are measured directly from the microscopic simulation run without assumed benefit. Under dense queuing, early advisory deceleration can increase overall delay or match baseline spillback. Collision and teleport counts reflect simulator boundary behavior, not safety certification.
+        </p>
+      </div>
+
+      <!-- Tab 3: Dataset Multi-Run Summary -->
+      <div class="tab-pane" id="tab-dataset-summary">
+        <h4 style="margin-bottom:12px; font-size:14px;">Summary Across Simulation Runs</h4>
+        <div class="data-table-container">
+          <table class="data-table" id="table-summary">
+            <thead>
+              <tr>
+                <th>Mode</th>
+                <th class="num-cell">Total Delay (Mean [Min, Max])</th>
+                <th class="num-cell">Spillback (Mean [Min, Max])</th>
+                <th class="num-cell">Max Queue (Mean [Min, Max])</th>
+                <th class="num-cell">Advisories (Mean)</th>
+                <th class="num-cell">Delivered (Mean)</th>
+                <th class="num-cell">Useful (Mean)</th>
+                <th class="num-cell">Errors / Teleports</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-summary"></tbody>
+          </table>
+        </div>
+        <p style="margin-top:12px; font-size:11px; color:var(--text-dim);">
+          Summary groupings reflect dataset statistics (either embedded in root summary or computed across matching runs). Values do not assume benefit.
+        </p>
+      </div>
+
+      <!-- Tab 4: Scenario Assumptions & Research Integrity -->
+      <div class="tab-pane" id="tab-assumptions">
+        <h4 style="margin-bottom:12px; font-size:14px;">Scenario Definition & Declared Assumptions</h4>
+        <div style="display:flex; flex-direction:column; gap:16px;">
+          <div style="background:var(--bg-surface); border:1px solid var(--border-color); border-radius:var(--radius-md); padding:14px;">
+            <strong style="color:var(--text-main); display:block; margin-bottom:8px;">Declared Scenario Assumptions</strong>
+            <ul id="list-assumptions" style="padding-left:20px; color:var(--text-muted); line-height:1.6;">
+              <li>None declared in dataset</li>
+            </ul>
+          </div>
+
+          <div style="background:var(--bg-surface); border:1px solid var(--border-color); border-radius:var(--radius-md); padding:14px;">
+            <strong style="color:var(--text-main); display:block; margin-bottom:8px;">Simulator Configuration & Environment</strong>
+            <div id="config-properties-grid" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:10px;">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+
+          <div style="background:rgba(239, 68, 68, 0.05); border:1px solid rgba(239, 68, 68, 0.25); border-radius:var(--radius-md); padding:14px;">
+            <strong style="color:#fca5a5; display:block; margin-bottom:8px;">Research Qualifications & Scope</strong>
+            <p style="color:var(--text-muted); line-height:1.6; font-size:12px;">
+              &bull; <strong>Synthetic Traffic:</strong> Traffic flows are produced using Eclipse SUMO microscopic simulations. Vehicle dynamics and lane-changing reflect car-following algorithms, not real-world road behavior.<br>
+              &bull; <strong>Modeled Communication:</strong> Packet transfer, radio contact, and queue observations are simulated as an abstract discrete channel with bounded TTL. No Android BLE hardware stack, GATT services, or physical RF fading were executed in this evaluation.<br>
+              &bull; <strong>Assumed Compliance:</strong> Driver response to receiving a queue caution is sampled deterministically as a simulation assumption, not observed human behavior.<br>
+              &bull; <strong>No Safety Certification:</strong> Simulator collision counters and teleports indicate gridlock resolution triggers and boundary conditions, not safety certifications or crash-reduction claims.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab 5: All Warnings Log -->
+      <div class="tab-pane" id="tab-all-warnings">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+          <h4 style="font-size:14px;">All Emitted Warnings for Seed <span id="warnings-seed-label">--</span></h4>
+          <div class="form-group">
+            <label class="form-label" for="filter-warnings-mode">Filter Mode:</label>
+            <select class="form-select" id="filter-warnings-mode">
+              <option value="all">All Modes</option>
+              <option value="local_only">local_only</option>
+              <option value="mesh_informed">mesh_informed</option>
+            </select>
+          </div>
+        </div>
+        <div class="data-table-container" style="max-height:450px; overflow-y:auto;">
+          <table class="data-table" id="table-all-warnings">
+            <thead>
+              <tr>
+                <th class="num-cell">Time</th>
+                <th>Mode</th>
+                <th>Recipient</th>
+                <th>Source</th>
+                <th>Event ID</th>
+                <th>Channel</th>
+                <th class="num-cell">Dist Ahead</th>
+                <th class="num-cell">Report-position crossing</th>
+                <th>Eventual response</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-all-warnings">
+              <tr><td colspan="9" style="color:var(--text-dim); text-align:center;">No warnings emitted in this run</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </section>
+
+  </main>
+
+  <footer class="app-footer">
+    RoadMesh Junction Lab &middot; Recorded simulation replay &middot; Offline
+  </footer>
+
+  <!-- Viewer Logic -->
+  <script>
+  (() => {
+    'use strict';
+
+    // Application State
+    const state = {
+      dataset: null,
+      currentSeed: null,
+      currentTime: 0,
+      timeIndex: 0,
+      availableTimes: [0],
+      maxTime: 0,
+      isPlaying: false,
+      playSpeed: 1.0,
+      loop: true,
+      reducedMotion: false,
+      selectedVehicleId: null,
+      bounds: { minX: -20, maxX: 560, minY: -90, maxY: 90, width: 580, height: 180 },
+      runsByMode: { no_advice: null, local_only: null, mesh_informed: null },
+      timerId: null,
+      lastFrameTimestamp: 0
+    };
+
+    // Static Pedestrian Relay Coordinates (model.py / scenario hints)
+    const PED_RELAYS = [
+      { id: 'ped-relay-a', x: 160.0, y: -12.0, label: 'Relay A (South)' },
+      { id: 'ped-relay-b', x: 240.0, y: 12.0, label: 'Relay B (North)' }
+    ];
+
+    // DOM Elements
+    const elements = {
+      filePicker: document.getElementById('file-picker'),
+      btnBrowseFile: document.getElementById('btn-browse-file'),
+      btnReloadSample: document.getElementById('btn-reload-sample'),
+      seedSelect: document.getElementById('seed-select'),
+      reducedMotionToggle: document.getElementById('reduced-motion-toggle'),
+      activeFilePill: document.getElementById('active-file-pill'),
+      noticeContainer: document.getElementById('notice-container'),
+      emptyDropzone: document.getElementById('empty-dropzone'),
+      btnDropzonePick: document.getElementById('btn-dropzone-pick'),
+      panelsGrid: document.getElementById('panels-grid'),
+      legendBar: document.getElementById('legend-bar'),
+      detailsCard: document.getElementById('details-card'),
+
+      // Playback
+      btnPlayPause: document.getElementById('btn-play-pause'),
+      playPauseIcon: document.getElementById('play-pause-icon'),
+      playPauseText: document.getElementById('play-pause-text'),
+      btnStepPrev: document.getElementById('btn-step-prev'),
+      btnStepNext: document.getElementById('btn-step-next'),
+      btnResetTime: document.getElementById('btn-reset-time'),
+      timeDisplay: document.getElementById('time-display'),
+      timeSlider: document.getElementById('time-slider'),
+      speedSelect: document.getElementById('speed-select'),
+      loopToggle: document.getElementById('loop-toggle'),
+
+      // Scenario info
+      scenarioTitle: document.getElementById('scenario-title'),
+      scenarioAssumptionsSummary: document.getElementById('scenario-assumptions-summary'),
+
+      // Panels
+      svgs: {
+        no_advice: document.getElementById('svg-no-advice'),
+        local_only: document.getElementById('svg-local-only'),
+        mesh_informed: document.getElementById('svg-mesh-informed')
+      },
+      tooltips: {
+        no_advice: document.getElementById('tooltip-no-advice'),
+        local_only: document.getElementById('tooltip-local-only'),
+        mesh_informed: document.getElementById('tooltip-mesh-informed')
+      },
+      qBanners: {
+        no_advice: document.getElementById('qbanner-no-advice'),
+        local_only: document.getElementById('qbanner-local-only'),
+        mesh_informed: document.getElementById('qbanner-mesh-informed')
+      },
+      liveMetrics: {
+        no_advice: {
+          active: document.getElementById('metric-no-advice-active'),
+          queue: document.getElementById('metric-no-advice-queue'),
+          arrived: document.getElementById('metric-no-advice-arrived'),
+          warn: document.getElementById('metric-no-advice-warn')
+        },
+        local_only: {
+          active: document.getElementById('metric-local-only-active'),
+          queue: document.getElementById('metric-local-only-queue'),
+          arrived: document.getElementById('metric-local-only-arrived'),
+          warn: document.getElementById('metric-local-only-warn')
+        },
+        mesh_informed: {
+          active: document.getElementById('metric-mesh-informed-active'),
+          queue: document.getElementById('metric-mesh-informed-queue'),
+          arrived: document.getElementById('metric-mesh-informed-arrived'),
+          warn: document.getElementById('metric-mesh-informed-warn')
+        }
+      },
+      footers: {
+        no_advice: {
+          delay: document.getElementById('footer-no-advice-delay'),
+          spill: document.getElementById('footer-no-advice-spill')
+        },
+        local_only: {
+          delay: document.getElementById('footer-local-only-delay'),
+          spill: document.getElementById('footer-local-only-spill')
+        },
+        mesh_informed: {
+          delay: document.getElementById('footer-mesh-informed-delay'),
+          spill: document.getElementById('footer-mesh-informed-spill')
+        }
+      },
+
+      // Tabs & Inspector
+      tabBtns: document.querySelectorAll('.tab-btn'),
+      tabPanes: document.querySelectorAll('.tab-pane'),
+      tabTimeIndicator: document.getElementById('tab-time-indicator'),
+      vehicleInspector: document.getElementById('vehicle-inspector'),
+      inspVehId: document.getElementById('insp-veh-id'),
+      inspClearBtn: document.getElementById('insp-clear-btn'),
+      inspStateNoAdvice: document.getElementById('insp-state-no-advice'),
+      inspStateLocalOnly: document.getElementById('insp-state-local-only'),
+      inspStateMeshInformed: document.getElementById('insp-state-mesh-informed'),
+      tbodyFrameWarnings: document.getElementById('tbody-frame-warnings'),
+      tbodyFrameKnowledge: document.getElementById('tbody-frame-knowledge'),
+      tbodyMetricsCompare: document.getElementById('tbody-metrics-compare'),
+      metricsSeedLabel: document.getElementById('metrics-seed-label'),
+      tbodySummary: document.getElementById('tbody-summary'),
+      listAssumptions: document.getElementById('list-assumptions'),
+      configPropertiesGrid: document.getElementById('config-properties-grid'),
+      warningsSeedLabel: document.getElementById('warnings-seed-label'),
+      filterWarningsMode: document.getElementById('filter-warnings-mode'),
+      tbodyAllWarnings: document.getElementById('tbody-all-warnings')
+    };
+
+    // Helper: Safely create DOM element with attributes and textContent (NO innerHTML)
+    function createElem(tag, attrs, text) {
+      const el = document.createElement(tag);
+      if (attrs) {
+        for (const [k, v] of Object.entries(attrs)) {
+          el.setAttribute(k, String(v));
+        }
+      }
+      if (text !== undefined && text !== null) {
+        el.textContent = String(text);
+      }
+      return el;
+    }
+
+    // Helper: Safely create SVG element with attributes
+    const SVG_NS = 'http://www.w3.org/2000/svg';
+    function createSvgElem(tag, attrs) {
+      const el = document.createElementNS(SVG_NS, tag);
+      if (attrs) {
+        for (const [k, v] of Object.entries(attrs)) {
+          el.setAttribute(k, String(v));
+        }
+      }
+      return el;
+    }
+
+    // Helper: Check finite number
+    function isFiniteNum(val) {
+      return typeof val === 'number' && Number.isFinite(val);
+    }
+
+    // Helper: Format seconds to mm:ss
+    function formatTime(s) {
+      const sec = Math.max(0, Math.floor(s));
+      const m = Math.floor(sec / 60);
+      const remS = sec % 60;
+      return `${String(m).padStart(2, '0')}:${String(remS).padStart(2, '0')}`;
+    }
+
+    // Notice display
+    function showNotice(type, message, details) {
+      elements.noticeContainer.replaceChildren();
+      elements.noticeContainer.className = `notice-bar ${type}`;
+      elements.noticeContainer.style.display = 'flex';
+
+      const textDiv = createElem('div', { style: 'flex:1;' });
+      const strong = createElem('strong', null, type === 'error' ? 'Validation Error: ' : (type === 'warn' ? 'Warning: ' : 'Notice: '));
+      textDiv.appendChild(strong);
+      textDiv.appendChild(document.createTextNode(message));
+
+      if (details && Array.isArray(details) && details.length > 0) {
+        const ul = createElem('ul', { style: 'margin-top:6px; padding-left:20px; font-size:12px;' });
+        for (const err of details.slice(0, 8)) {
+          ul.appendChild(createElem('li', null, err));
+        }
+        if (details.length > 8) {
+          ul.appendChild(createElem('li', null, `...and ${details.length - 8} more issues.`));
+        }
+        textDiv.appendChild(ul);
+      }
+
+      const closeBtn = createElem('button', { class: 'notice-close', 'aria-label': 'Close notice' }, '×');
+      closeBtn.addEventListener('click', () => {
+        elements.noticeContainer.style.display = 'none';
+      });
+
+      elements.noticeContainer.appendChild(textDiv);
+      elements.noticeContainer.appendChild(closeBtn);
+    }
+
+    // Schema Validation according to CONTRACT.md Result JSON v1
+    function validateResultJson(data) {
+      const errors = [];
+      const object = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+      const fail = message => { if (errors.length < 30) errors.push(message); };
+      const text = v => typeof v === 'string' && v.length <= 4096;
+      const nonnegative = v => isFiniteNum(v) && v >= 0;
+      const count = v => Number.isSafeInteger(v) && v >= 0;
+      const channel = v => v === 'local' || v === 'mesh';
+      if (!object(data)) return {valid: false, errors: ['Expected a JSON object.']};
+      if (data.schemaVersion !== 1) fail('Expected result schemaVersion 1.');
+      if (!text(data.title)) fail('Title must be a string.');
+      if (!object(data.config)) fail('Missing configuration object.');
+      if (!Array.isArray(data.assumptions) || !data.assumptions.every(text)) fail('Assumptions must be strings.');
+      if (!Array.isArray(data.seeds) || !data.seeds.length || data.seeds.length > 20 ||
+          !data.seeds.every(count) || new Set(data.seeds).size !== data.seeds.length) fail('Use 1–20 unique integer seeds.');
+      if (!Array.isArray(data.runs) || !data.runs.length || data.runs.length > 60) {
+        fail('Expected 1–60 runs.'); return {valid: false, errors};
+      }
+      const pairs = new Set();
+      data.runs.forEach((run, idx) => {
+        if (!object(run)) { fail(`Run ${idx} is not an object.`); return; }
+        if (!['no_advice', 'local_only', 'mesh_informed'].includes(run.mode) || !count(run.seed)) fail(`Run ${idx}: invalid mode or seed.`);
+        const pair = `${run.mode}/${run.seed}`;
+        if (pairs.has(pair)) fail(`Duplicate run ${pair}.`);
+        pairs.add(pair);
+        if (!Array.isArray(data.seeds) || !data.seeds.includes(run.seed)) fail(`Run ${idx}: seed absent from seed list.`);
+        if (!object(run.metrics) || Object.values(run.metrics).some(v => v !== null && !nonnegative(v))) fail(`Run ${idx}: invalid metrics.`);
+        for (const key of ['scheduledVehicles', 'arrivedVehicles', 'activeVehicles', 'pendingVehicles', 'totalDelayS', 'spillbackDurationS', 'maxQueueExtentM', 'advisoryCount']) {
+          if (!nonnegative(run.metrics?.[key])) fail(`Run ${idx}: missing numeric metric ${key}.`);
+        }
+        if (!Array.isArray(run.frames) || !run.frames.length || run.frames.length > 3601) { fail(`Run ${idx}: invalid frames.`); return; }
+        let previous = -1;
+        run.frames.forEach((f, fi) => {
+          if (!object(f)) { fail(`Run ${idx} frame ${fi}: expected object.`); return; }
+          if (!nonnegative(f.time) || f.time <= previous) fail(`Run ${idx} frame ${fi}: times must increase.`);
+          previous = f.time;
+          if (!nonnegative(f.queueExtentM) || !count(f.pending) || !count(f.arrived)) fail(`Run ${idx} frame ${fi}: invalid counters.`);
+          if (!Array.isArray(f.vehicles) || f.vehicles.length > 200) { fail(`Run ${idx} frame ${fi}: invalid vehicles.`); return; }
+          const ids = new Set();
+          for (const v of f.vehicles) {
+            if (!object(v) || !text(v.id) || !isFiniteNum(v.x) || !isFiniteNum(v.y) ||
+                Math.abs(v.x) > 100000 || Math.abs(v.y) > 100000 || !nonnegative(v.speed) || typeof v.equipped !== 'boolean') {
+              fail(`Run ${idx} frame ${fi}: malformed vehicle.`); continue;
+            }
+            if (ids.has(v.id)) fail(`Run ${idx} frame ${fi}: duplicate vehicle.`);
+            ids.add(v.id);
+          }
+          if (!Array.isArray(f.warnings) || !f.warnings.every(text)) fail(`Run ${idx} frame ${fi}: invalid caution recipients.`);
+          if (!Array.isArray(f.knowledge)) { fail(`Run ${idx} frame ${fi}: invalid observations.`); return; }
+          for (const k of f.knowledge) {
+            if (!object(k) || !text(k.recipientId) || !text(k.sourceId) || !channel(k.channel) ||
+                !nonnegative(k.capturedAt) || !nonnegative(k.expiresAt) || k.capturedAt > f.time || k.expiresAt <= f.time) {
+              fail(`Run ${idx} frame ${fi}: malformed or stale observation.`);
+            }
+          }
+        });
+        if (!Array.isArray(run.warnings)) { fail(`Run ${idx}: invalid warning log.`); return; }
+        for (const w of run.warnings) {
+          if (!object(w) || !['recipientId', 'sourceId', 'eventId'].every(k => text(w[k])) || !channel(w.channel) ||
+              !['time', 'capturedAt', 'expiresAt', 'aheadDistanceM'].every(k => nonnegative(w[k])) ||
+              !isFiniteNum(w.x) || !isFiniteNum(w.y) || typeof w.responded !== 'boolean' ||
+              w.capturedAt > w.time || w.expiresAt <= w.time ||
+              (w.leadS != null && !nonnegative(w.leadS))) fail(`Run ${idx}: malformed warning.`);
+          }
+      });
+      return {valid: errors.length === 0, errors};
+    }
+
+    // Bounds computation across all frames in runs
+    function computeCorridorBounds(runs) {
+      let minX = 0, maxX = 540, minY = -80, maxY = 80;
+      let vehicleFound = false;
+
+      for (const run of runs) {
+        if (!run || !Array.isArray(run.frames)) continue;
+        for (const frame of run.frames) {
+          if (!frame || !Array.isArray(frame.vehicles)) continue;
+          for (const v of frame.vehicles) {
+            if (isFiniteNum(v.x) && isFiniteNum(v.y)) {
+              if (!vehicleFound) {
+                minX = v.x; maxX = v.x;
+                minY = v.y; maxY = v.y;
+                vehicleFound = true;
+              } else {
+                minX = Math.min(minX, v.x);
+                maxX = Math.max(maxX, v.x);
+                minY = Math.min(minY, v.y);
+                maxY = Math.max(maxY, v.y);
+              }
+            }
+          }
+        }
+      }
+
+      minX = Math.min(minX, -20);
+      maxX = Math.max(maxX, 560);
+      minY = Math.min(minY, -85);
+      maxY = Math.max(maxY, 85);
+
+      const padX = 25;
+      const padY = 20;
+      minX -= padX;
+      maxX += padX;
+      minY -= padY;
+      maxY += padY;
+
+      return {
+        minX,
+        maxX,
+        minY,
+        maxY,
+        width: maxX - minX,
+        height: maxY - minY
+      };
+    }
+
+    // Dataset loading handler
+    function loadDataset(data, sourceLabel) {
+      const validation = validateResultJson(data);
+      if (!validation.valid) {
+        showNotice('error', 'Malformed result file. The previous valid replay remains available.', validation.errors);
+        return false;
+      }
+
+      state.dataset = data;
+      state.bounds = computeCorridorBounds(data.runs);
+
+      // Update Header Info
+      elements.activeFilePill.style.display = 'inline-block';
+      elements.activeFilePill.textContent = sourceLabel || 'Result JSON';
+      elements.scenarioTitle.textContent = `Scenario: ${data.title || 'Junction Lab Comparison'}`;
+
+      // Assumptions
+      elements.listAssumptions.replaceChildren();
+      if (Array.isArray(data.assumptions) && data.assumptions.length > 0) {
+        data.assumptions.forEach(text => {
+          elements.listAssumptions.appendChild(createElem('li', null, text));
+        });
+        elements.scenarioAssumptionsSummary.textContent = 'Recorded synthetic traffic · modeled communication · assumed driver response. Full details are in the Assumptions tab below.';
+      } else {
+        elements.listAssumptions.appendChild(createElem('li', null, 'No specific assumptions recorded in file.'));
+      }
+
+      // Configuration grid
+      elements.configPropertiesGrid.replaceChildren();
+      if (data.config && typeof data.config === 'object') {
+        for (const [k, v] of Object.entries(data.config)) {
+          const item = createElem('div', { style: 'font-size:12px; background:var(--bg-panel); padding:6px 10px; border-radius:4px; border:1px solid var(--border-color);' });
+          item.appendChild(createElem('span', { style: 'color:var(--text-dim); display:block; font-size:10px; text-transform:uppercase;' }, k));
+          item.appendChild(createElem('span', { style: 'font-family:var(--font-mono); color:var(--text-main); font-weight:600;' }, JSON.stringify(v)));
+          elements.configPropertiesGrid.appendChild(item);
+        }
+      }
+
+      // Extract unique seeds
+      const seedSet = new Set();
+      if (Array.isArray(data.seeds)) {
+        data.seeds.forEach(s => seedSet.add(s));
+      }
+      data.runs.forEach(r => {
+        if (isFiniteNum(r.seed)) seedSet.add(r.seed);
+      });
+      const seeds = Array.from(seedSet).sort((a, b) => a - b);
+
+      elements.seedSelect.replaceChildren();
+      seeds.forEach(s => {
+        const opt = createElem('option', { value: String(s) }, `Seed ${s}`);
+        elements.seedSelect.appendChild(opt);
+      });
+      elements.seedSelect.disabled = false;
+
+      // Select initial seed
+      state.currentSeed = seeds[0] ?? null;
+      if (state.currentSeed !== null) {
+        elements.seedSelect.value = String(state.currentSeed);
+        selectSeed(state.currentSeed);
+      }
+
+      // Show panels & details
+      elements.emptyDropzone.style.display = 'none';
+      elements.panelsGrid.style.display = 'grid';
+      elements.legendBar.style.display = 'flex';
+      elements.detailsCard.style.display = 'block';
+
+      // Multi-run summary table
+      renderSummaryTable(data);
+
+      showNotice('info', `Successfully loaded "${data.title || 'Result JSON'}" with ${data.runs.length} runs across ${seeds.length} seed(s).`);
+      return true;
+    }
+
+    // Select Seed and bind runs
+    function selectSeed(seed) {
+      state.currentSeed = seed;
+      pausePlayback();
+
+      // Find runs for this seed
+      const runsForSeed = (state.dataset?.runs || []).filter(r => r.seed === seed);
+      state.runsByMode = {
+        no_advice: runsForSeed.find(r => r.mode === 'no_advice') || null,
+        local_only: runsForSeed.find(r => r.mode === 'local_only') || null,
+        mesh_informed: runsForSeed.find(r => r.mode === 'mesh_informed') || null
+      };
+
+      // Extract all unique frame times
+      const timeSet = new Set();
+      Object.values(state.runsByMode).forEach(run => {
+        if (run && Array.isArray(run.frames)) {
+          run.frames.forEach(f => {
+            if (isFiniteNum(f.time)) timeSet.add(f.time);
+          });
+        }
+      });
+      state.availableTimes = Array.from(timeSet).sort((a, b) => a - b);
+      if (state.availableTimes.length === 0) {
+        state.availableTimes = [0];
+      }
+      state.maxTime = state.availableTimes[state.availableTimes.length - 1];
+      state.timeIndex = 0;
+      state.currentTime = state.availableTimes[0];
+
+      // Update Controls
+      elements.timeSlider.min = '0';
+      elements.timeSlider.max = String(state.availableTimes.length - 1);
+      elements.timeSlider.step = '1';
+      elements.timeSlider.value = '0';
+      elements.timeSlider.disabled = state.availableTimes.length <= 1;
+      elements.btnPlayPause.disabled = state.availableTimes.length <= 1;
+      elements.btnStepPrev.disabled = state.availableTimes.length <= 1;
+      elements.btnStepNext.disabled = state.availableTimes.length <= 1;
+      elements.btnResetTime.disabled = state.availableTimes.length <= 1;
+
+      elements.metricsSeedLabel.textContent = String(seed);
+      elements.warningsSeedLabel.textContent = String(seed);
+
+      // Render seed comparisons
+      renderMetricsComparisonTable();
+      renderAllWarningsTable();
+
+      // Render initial frame
+      seekIndex(0);
+    }
+
+    // Seek by time index
+    function seekIndex(idx) {
+      state.timeIndex = Math.max(0, Math.min(state.availableTimes.length - 1, idx));
+      state.currentTime = state.availableTimes[state.timeIndex];
+      elements.timeSlider.value = String(state.timeIndex);
+      elements.timeDisplay.textContent = `t = ${state.currentTime.toFixed(1)}s / ${state.maxTime.toFixed(1)}s (${formatTime(state.currentTime)})`;
+      elements.tabTimeIndicator.textContent = state.currentTime.toFixed(1);
+
+      document.querySelectorAll('.active-t-num').forEach(el => {
+        el.textContent = state.currentTime.toFixed(1);
+      });
+
+      renderFrameAtCurrentTime();
+    }
+
+    // Step time forward/back by index
+    function stepTime(delta) {
+      pausePlayback();
+      seekIndex(state.timeIndex + delta);
+    }
+
+    // Playback loop
+    function startPlayback() {
+      if (state.availableTimes.length <= 1) return;
+      if (state.timeIndex >= state.availableTimes.length - 1) {
+        seekIndex(0);
+      }
+      state.isPlaying = true;
+      elements.playPauseIcon.textContent = '⏸';
+      elements.playPauseText.textContent = 'Pause';
+      state.lastFrameTimestamp = performance.now();
+      scheduleNextPlaybackTick();
+    }
+
+    function pausePlayback() {
+      state.isPlaying = false;
+      elements.playPauseIcon.textContent = '▶';
+      elements.playPauseText.textContent = 'Play';
+      if (state.timerId) {
+        clearTimeout(state.timerId);
+        state.timerId = null;
+      }
+    }
+
+    function scheduleNextPlaybackTick() {
+      if (!state.isPlaying) return;
+      const currentT = state.availableTimes[state.timeIndex];
+      const nextIdx = state.timeIndex + 1;
+      let intervalSec = 1.0;
+      if (nextIdx < state.availableTimes.length) {
+        intervalSec = Math.max(0.1, state.availableTimes[nextIdx] - currentT);
+      }
+      const stepIntervalMs = (intervalSec * 1000) / state.playSpeed;
+
+      state.timerId = setTimeout(() => {
+        if (!state.isPlaying) return;
+        if (state.timeIndex < state.availableTimes.length - 1) {
+          seekIndex(state.timeIndex + 1);
+          scheduleNextPlaybackTick();
+        } else {
+          if (state.loop) {
+            seekIndex(0);
+            scheduleNextPlaybackTick();
+          } else {
+            pausePlayback();
+          }
+        }
+      }, stepIntervalMs);
+    }
+
+    // Frame retrieval
+    function getFrameForMode(mode, time) {
+      const run = state.runsByMode[mode];
+      if (!run || !Array.isArray(run.frames)) return null;
+      const frames = run.frames;
+      let matched = null;
+      for (let i = 0; i < frames.length; i++) {
+        if (frames[i].time === time) return frames[i];
+        if (frames[i].time < time) matched = frames[i];
+        else if (frames[i].time > time) break;
+      }
+      return matched;
+    }
+
+    // Render frame across all 3 panels
+    function renderFrameAtCurrentTime() {
+      const activeWarningsList = [];
+      const activeKnowledgeList = [];
+
+      ['no_advice', 'local_only', 'mesh_informed'].forEach(mode => {
+        const frame = getFrameForMode(mode, state.currentTime);
+        const run = state.runsByMode[mode];
+        renderRoadPanel(mode, frame, run);
+
+        // Aggregate frame warnings & knowledge for inspector
+        if (frame) {
+          if (Array.isArray(frame.warnings) && run && Array.isArray(run.warnings)) {
+            frame.warnings.forEach(wRecipientId => {
+              const wObj = run.warnings.find(w => w.recipientId === wRecipientId && w.time <= frame.time && frame.time - w.time <= 1);
+              activeWarningsList.push({
+                mode,
+                recipientId: wRecipientId,
+                sourceId: wObj?.sourceId || 'N/A',
+                channel: wObj?.channel || (mode === 'local_only' ? 'local' : 'mesh'),
+                aheadDistanceM: wObj?.aheadDistanceM ?? null,
+                leadS: wObj?.leadS ?? null,
+                responded: wObj?.responded ?? false,
+                responseAccepted: wObj?.responseAccepted ?? false,
+                responseAppliedAt: wObj?.responseAppliedAt ?? null,
+                eventId: wObj?.eventId || 'N/A'
+              });
+            });
+          }
+
+          if (Array.isArray(frame.knowledge)) {
+            frame.knowledge.forEach(k => {
+              activeKnowledgeList.push({
+                mode,
+                recipientId: k.recipientId,
+                sourceId: k.sourceId,
+                channel: k.channel,
+                capturedAt: k.capturedAt,
+                expiresAt: k.expiresAt
+              });
+            });
+          }
+        }
+      });
+
+      renderFrameTables(activeWarningsList, activeKnowledgeList);
+      updateSelectedVehicleInspector();
+    }
+
+    // Coordinate conversion: SUMO (x East, y North) to SVG canvas
+    const SVG_CANVAS_W = 1000;
+    const SVG_CANVAS_H = 380;
+    const MARGIN = 30;
+
+    function toSvgCoords(x, y, bounds) {
+      const scaleX = (SVG_CANVAS_W - 2 * MARGIN) / bounds.width;
+      const scaleY = (SVG_CANVAS_H - 2 * MARGIN) / bounds.height;
+      const scale = Math.min(scaleX, scaleY);
+
+      const renderW = bounds.width * scale;
+      const renderH = bounds.height * scale;
+      const originX = (SVG_CANVAS_W - renderW) / 2;
+      const originY = (SVG_CANVAS_H - renderH) / 2;
+
+      const sx = originX + (x - bounds.minX) * scale;
+      const sy = originY + (bounds.maxY - y) * scale;
+
+      return { sx, sy, scale };
+    }
+
+    // Render individual road panel
+    function renderRoadPanel(mode, frame, run) {
+      const svg = elements.svgs[mode];
+      const live = elements.liveMetrics[mode];
+      const qBanner = elements.qBanners[mode];
+      const footer = elements.footers[mode];
+
+      // Update live counters
+      if (frame) {
+        live.active.textContent = String(frame.vehicles?.length ?? 0);
+        const qExt = isFiniteNum(frame.queueExtentM) ? frame.queueExtentM : 0;
+        live.queue.textContent = `${qExt.toFixed(1)} m`;
+        if (qExt > 0) live.queue.classList.add('alert');
+        else live.queue.classList.remove('alert');
+
+        live.arrived.textContent = String(frame.arrived ?? 0);
+        live.warn.textContent = String(frame.warnings?.length ?? 0);
+        if (frame.warnings?.length > 0) live.warn.classList.add('alert');
+        else live.warn.classList.remove('alert');
+
+        if (qExt > 0) {
+          qBanner.textContent = `Queue Extent: ${qExt.toFixed(1)} m`;
+          qBanner.classList.add('active');
+        } else {
+          qBanner.classList.remove('active');
+        }
+      } else {
+        live.active.textContent = '0';
+        live.queue.textContent = '0.0 m';
+        live.arrived.textContent = '0';
+        live.warn.textContent = '0';
+        qBanner.classList.remove('active');
+      }
+
+      // Footer stats
+      if (run?.metrics) {
+        footer.delay.textContent = `Run total delay: ${run.metrics.totalDelayS?.toFixed(1) ?? '--'}s`;
+        footer.spill.textContent = `Buffer exposure: ${run.metrics.spillbackDurationS?.toFixed(1) ?? '--'}s`;
+      } else {
+        footer.delay.textContent = 'Delay: --';
+        footer.spill.textContent = 'Spillback: --';
+      }
+
+      // Clear SVG
+      svg.replaceChildren();
+      svg.setAttribute('viewBox', `0 0 ${SVG_CANVAS_W} ${SVG_CANVAS_H}`);
+
+      const bounds = state.bounds;
+
+      // Group for static schematic roads
+      const gRoads = createSvgElem('g', { class: 'schematic-roads' });
+      svg.appendChild(gRoads);
+
+      const mapPt = (x, y) => toSvgCoords(x, y, bounds);
+
+      // Background grid lines (every 100m)
+      const gGrid = createSvgElem('g', { opacity: '0.12', stroke: '#475569', 'stroke-width': '1' });
+      for (let gx = 0; gx <= 540; gx += 100) {
+        const pTop = mapPt(gx, 90);
+        const pBot = mapPt(gx, -90);
+        gGrid.appendChild(createSvgElem('line', { x1: pTop.sx, y1: pTop.sy, x2: pBot.sx, y2: pBot.sy, 'stroke-dasharray': '3,5' }));
+        const label = createSvgElem('text', {
+          x: pBot.sx,
+          y: pBot.sy + 14,
+          fill: '#64748b',
+          'font-size': '22',
+          'text-anchor': 'middle',
+          'font-family': 'var(--font-mono)'
+        });
+        label.textContent = `${gx}m`;
+        gGrid.appendChild(label);
+      }
+      gRoads.appendChild(gGrid);
+
+      // Main West-East Corridor (y = 0, width = 14m)
+      const roadLeft = mapPt(bounds.minX + 5, 7);
+      const roadRight = mapPt(bounds.maxX - 5, -7);
+      const roadW = Math.abs(roadRight.sx - roadLeft.sx);
+      const roadH = Math.abs(roadRight.sy - roadLeft.sy);
+
+      gRoads.appendChild(createSvgElem('rect', {
+        x: roadLeft.sx,
+        y: roadLeft.sy,
+        width: roadW,
+        height: roadH,
+        fill: '#151922',
+        stroke: '#283244',
+        'stroke-width': '1.5'
+      }));
+
+      // Main corridor center dashed lane line
+      const centerL = mapPt(bounds.minX + 5, 0);
+      const centerR = mapPt(bounds.maxX - 5, 0);
+      gRoads.appendChild(createSvgElem('line', {
+        x1: centerL.sx,
+        y1: centerL.sy,
+        x2: centerR.sx,
+        y2: centerR.sy,
+        stroke: '#3b4559',
+        'stroke-width': '1.2',
+        'stroke-dasharray': '6,6'
+      }));
+
+      // Junction 1 Side Arms (x = 200, y = -80..80, width = 14m)
+      const j1Top = mapPt(193, 80);
+      const j1Bot = mapPt(207, -80);
+      gRoads.appendChild(createSvgElem('rect', {
+        x: j1Top.sx,
+        y: j1Top.sy,
+        width: Math.abs(j1Bot.sx - j1Top.sx),
+        height: Math.abs(j1Bot.sy - j1Top.sy),
+        fill: '#151922',
+        stroke: '#283244',
+        'stroke-width': '1.5'
+      }));
+      const j1CenterTop = mapPt(200, 80);
+      const j1CenterBot = mapPt(200, -80);
+      gRoads.appendChild(createSvgElem('line', {
+        x1: j1CenterTop.sx,
+        y1: j1CenterTop.sy,
+        x2: j1CenterBot.sx,
+        y2: j1CenterBot.sy,
+        stroke: '#3b4559',
+        'stroke-width': '1.2',
+        'stroke-dasharray': '5,5'
+      }));
+
+      // Junction 2 Side Arms (x = 320, y = -80..80, width = 14m)
+      const j2Top = mapPt(313, 80);
+      const j2Bot = mapPt(327, -80);
+      gRoads.appendChild(createSvgElem('rect', {
+        x: j2Top.sx,
+        y: j2Top.sy,
+        width: Math.abs(j2Bot.sx - j2Top.sx),
+        height: Math.abs(j2Bot.sy - j2Top.sy),
+        fill: '#151922',
+        stroke: '#283244',
+        'stroke-width': '1.5'
+      }));
+      const j2CenterTop = mapPt(320, 80);
+      const j2CenterBot = mapPt(320, -80);
+      gRoads.appendChild(createSvgElem('line', {
+        x1: j2CenterTop.sx,
+        y1: j2CenterTop.sy,
+        x2: j2CenterBot.sx,
+        y2: j2CenterBot.sy,
+        stroke: '#3b4559',
+        'stroke-width': '1.2',
+        'stroke-dasharray': '5,5'
+      }));
+
+      // Junction Conflict / Keep-Clear Zones (Yellow Dashed Rectangles)
+      // J1: x=193..207, y=-7..7
+      const j1BoxTop = mapPt(193, 7);
+      const j1BoxBot = mapPt(207, -7);
+      gRoads.appendChild(createSvgElem('rect', {
+        x: j1BoxTop.sx,
+        y: j1BoxTop.sy,
+        width: Math.abs(j1BoxBot.sx - j1BoxTop.sx),
+        height: Math.abs(j1BoxBot.sy - j1BoxTop.sy),
+        fill: 'rgba(245, 158, 11, 0.15)',
+        stroke: '#f59e0b',
+        'stroke-width': '1.2',
+        'stroke-dasharray': '3,3'
+      }));
+      const j1Label = createSvgElem('text', {
+        x: mapPt(200, 11).sx,
+        y: mapPt(200, 11).sy,
+        fill: '#fbbf24',
+        'font-size': '22',
+        'font-weight': '600',
+        'text-anchor': 'middle'
+      });
+      j1Label.textContent = 'J1';
+      gRoads.appendChild(j1Label);
+
+      // J2: x=313..327, y=-7..7
+      const j2BoxTop = mapPt(313, 7);
+      const j2BoxBot = mapPt(327, -7);
+      gRoads.appendChild(createSvgElem('rect', {
+        x: j2BoxTop.sx,
+        y: j2BoxTop.sy,
+        width: Math.abs(j2BoxBot.sx - j2BoxTop.sx),
+        height: Math.abs(j2BoxBot.sy - j2BoxTop.sy),
+        fill: 'rgba(245, 158, 11, 0.15)',
+        stroke: '#f59e0b',
+        'stroke-width': '1.2',
+        'stroke-dasharray': '3,3'
+      }));
+      const j2Label = createSvgElem('text', {
+        x: mapPt(320, 11).sx,
+        y: mapPt(320, 11).sy,
+        fill: '#fbbf24',
+        'font-size': '22',
+        'font-weight': '600',
+        'text-anchor': 'middle'
+      });
+      j2Label.textContent = 'J2';
+      gRoads.appendChild(j2Label);
+
+      // West (Source) and East (Sink) Indicators
+      const srcText = createSvgElem('text', {
+        x: mapPt(10, -11).sx,
+        y: mapPt(10, -11).sy,
+        fill: '#94a3b8',
+        'font-size': '22'
+      });
+      srcText.textContent = 'Source →';
+      gRoads.appendChild(srcText);
+
+      const sinkText = createSvgElem('text', {
+        x: mapPt(520, -11).sx,
+        y: mapPt(520, -11).sy,
+        fill: '#94a3b8',
+        'font-size': '22',
+        'text-anchor': 'end'
+      });
+      sinkText.textContent = 'Destination →';
+      gRoads.appendChild(sinkText);
+
+      // Pedestrian Relays (modeled stationary relay posts)
+      (mode === 'mesh_informed' && state.dataset.config?.relay_enabled !== false ? PED_RELAYS : []).forEach(relay => {
+        const rCoords = mapPt(relay.x, relay.y);
+        const rGroup = createSvgElem('g', { class: 'relay-node', opacity: '0.85' });
+        const rDot = createSvgElem('circle', {
+          cx: rCoords.sx,
+          cy: rCoords.sy,
+          r: '5',
+          fill: 'var(--color-relay)',
+          stroke: '#ffffff',
+          'stroke-width': '1'
+        });
+        const rRing = createSvgElem('circle', {
+          cx: rCoords.sx,
+          cy: rCoords.sy,
+          r: '12',
+          fill: 'none',
+          stroke: 'var(--color-relay)',
+          'stroke-width': '1',
+          'stroke-dasharray': '2,2'
+        });
+        const rText = createSvgElem('text', {
+          x: rCoords.sx,
+          y: relay.y < 0 ? rCoords.sy + 14 : rCoords.sy - 8,
+          fill: '#c084fc',
+          'font-size': '20',
+          'font-family': 'var(--font-mono)',
+          'text-anchor': 'middle'
+        });
+        rText.textContent = relay.id === 'ped-relay-a' ? 'Relay A' : 'Relay B';
+        rGroup.appendChild(rRing);
+        rGroup.appendChild(rDot);
+        rGroup.appendChild(rText);
+        gRoads.appendChild(rGroup);
+      });
+
+      // Dynamic Queue Extent Highlight Zone (Extending backwards from J2 x=320)
+      if (frame && isFiniteNum(frame.queueExtentM) && frame.queueExtentM > 0) {
+        const qEnd = 320;
+        const qStart = Math.max(0, 320 - frame.queueExtentM);
+        const qPtTop = mapPt(qStart, 0);
+        const qPtBot = mapPt(qEnd, -7);
+        const qW = Math.abs(qPtBot.sx - qPtTop.sx);
+        const qH = Math.abs(qPtBot.sy - qPtTop.sy);
+
+        gRoads.appendChild(createSvgElem('rect', {
+          x: qPtTop.sx,
+          y: qPtTop.sy,
+          width: qW,
+          height: qH,
+          fill: 'rgba(239, 68, 68, 0.35)',
+          stroke: '#ef4444',
+          'stroke-width': '1.5',
+          'stroke-dasharray': '4,2'
+        }));
+      }
+
+      // Group for Vehicles
+      const gVehicles = createSvgElem('g', { class: 'vehicles-layer' });
+      svg.appendChild(gVehicles);
+
+      if (!frame || !Array.isArray(frame.vehicles) || frame.vehicles.length === 0) {
+        if (!run) {
+          const emptyText = createSvgElem('text', {
+            x: SVG_CANVAS_W / 2,
+            y: SVG_CANVAS_H / 2,
+            fill: '#64748b',
+            'font-size': '14',
+            'text-anchor': 'middle'
+          });
+          emptyText.textContent = `No run data available for policy "${mode}".`;
+          svg.appendChild(emptyText);
+        }
+        return;
+      }
+
+      // Vehicles rendering
+      frame.vehicles.forEach(v => {
+        if (!v || !isFiniteNum(v.x) || !isFiniteNum(v.y)) return;
+
+        const coords = mapPt(v.x, v.y);
+        const isEquipped = Boolean(v.equipped);
+        const hasWarning = Array.isArray(frame.warnings) && frame.warnings.includes(v.id);
+        const knowledgeItems = (Array.isArray(frame.knowledge) ? frame.knowledge.filter(k => k.recipientId === v.id) : []);
+        const hasKnowledge = knowledgeItems.length > 0;
+        const speed = isFiniteNum(v.speed) ? v.speed : 0;
+        const isStopped = speed <= 0.5;
+        const isSelected = state.selectedVehicleId === v.id;
+
+        const vLen = Math.max(14, coords.scale * 4.5);
+        const vWid = Math.max(8, coords.scale * 2.2);
+
+        let headingDeg = 0;
+        if (Math.abs(v.y) > 10) {
+          headingDeg = v.y > 0 ? -90 : 90;
+        }
+
+        const vGroup = createSvgElem('g', {
+          class: `vehicle-glyph ${isSelected ? 'selected' : ''}`,
+          transform: `translate(${coords.sx}, ${coords.sy}) rotate(${headingDeg})`,
+          style: 'cursor: pointer;'
+        });
+
+        // Warning Pulse Ring
+        if (hasWarning) {
+          const warnRing = createSvgElem('circle', {
+            r: String(vLen * 0.9),
+            fill: 'rgba(239, 68, 68, 0.2)',
+            stroke: '#ef4444',
+            'stroke-width': '1.5'
+          });
+          vGroup.appendChild(warnRing);
+        }
+
+        // Knowledge Halo Ring
+        if (hasKnowledge && !hasWarning) {
+          const isMesh = knowledgeItems.some(k => k.channel === 'mesh');
+          const haloColor = isMesh ? 'var(--accent-mesh)' : 'var(--accent-local-only)';
+          const haloRing = createSvgElem('circle', {
+            r: String(vLen * 0.75),
+            fill: 'none',
+            stroke: haloColor,
+            'stroke-width': '1.2',
+            'stroke-dasharray': '2,2'
+          });
+          vGroup.appendChild(haloRing);
+        }
+
+        // Selection Ring
+        if (isSelected) {
+          const selRing = createSvgElem('circle', {
+            r: String(vLen * 1.1),
+            fill: 'none',
+            stroke: '#ffffff',
+            'stroke-width': '2'
+          });
+          vGroup.appendChild(selRing);
+        }
+
+        // Vehicle Body Rect
+        let bodyColor = isEquipped ? 'var(--color-equipped)' : 'var(--color-unequipped)';
+        if (hasWarning) bodyColor = 'var(--color-warn)';
+
+        const bodyRect = createSvgElem('rect', {
+          x: String(-vLen / 2),
+          y: String(-vWid / 2),
+          width: String(vLen),
+          height: String(vWid),
+          rx: '2',
+          fill: bodyColor,
+          stroke: isSelected ? '#ffffff' : '#000000',
+          'stroke-width': '1'
+        });
+        vGroup.appendChild(bodyRect);
+
+        // Stopped indicator (Red Brake Marker on rear: West side)
+        if (isStopped) {
+          const brakeMarker = createSvgElem('line', {
+            x1: String(-vLen / 2),
+            y1: String(-vWid / 2 + 1),
+            x2: String(-vLen / 2),
+            y2: String(vWid / 2 - 1),
+            stroke: '#dc2626',
+            'stroke-width': '2.5'
+          });
+          vGroup.appendChild(brakeMarker);
+        }
+
+        // Equipped Antenna Marker
+        if (isEquipped) {
+          const antenna = createSvgElem('circle', {
+            cx: '0',
+            cy: '0',
+            r: '1.5',
+            fill: '#ffffff'
+          });
+          vGroup.appendChild(antenna);
+        }
+
+        // Warning Exclamation Icon
+        if (hasWarning) {
+          const warnText = createSvgElem('text', {
+            x: '0',
+            y: String(vWid * 0.9 + 7),
+            fill: '#ef4444',
+            'font-size': '11',
+            'font-weight': 'bold',
+            'text-anchor': 'middle'
+          });
+          warnText.textContent = '▲';
+          vGroup.appendChild(warnText);
+        }
+
+        // Vehicle ID Label on selection
+        if (isSelected) {
+          const idLabel = createSvgElem('text', {
+            x: '0',
+            y: String(-vWid / 2 - 5),
+            fill: '#ffffff',
+            'font-size': '22',
+            'font-family': 'var(--font-mono)',
+            'font-weight': 'bold',
+            'text-anchor': 'middle'
+          });
+          idLabel.textContent = v.id;
+          vGroup.appendChild(idLabel);
+        }
+
+        // Tooltip & Click Handlers
+        vGroup.addEventListener('mouseenter', () => {
+          showVehicleTooltip(mode, v, frame, coords.sx, coords.sy);
+        });
+        vGroup.addEventListener('mouseleave', () => {
+          elements.tooltips[mode].style.display = 'none';
+        });
+        vGroup.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          selectVehicle(v.id);
+        });
+
+        gVehicles.appendChild(vGroup);
+      });
+    }
+
+    // Vehicle Tooltip display
+    function showVehicleTooltip(mode, vehicle, frame, sx, sy) {
+      const tooltip = elements.tooltips[mode];
+      tooltip.replaceChildren();
+
+      const speedMps = isFiniteNum(vehicle.speed) ? vehicle.speed : 0;
+      const speedKmh = speedMps * 3.6;
+      const hasWarn = Array.isArray(frame.warnings) && frame.warnings.includes(vehicle.id);
+      const kList = (Array.isArray(frame.knowledge) ? frame.knowledge.filter(k => k.recipientId === vehicle.id) : []);
+
+      const title = createElem('div', { style: 'font-weight:700; font-family:var(--font-mono); margin-bottom:4px;' }, `Vehicle: ${vehicle.id}`);
+      tooltip.appendChild(title);
+
+      const items = [
+        `Position: (${vehicle.x.toFixed(1)}m, ${vehicle.y.toFixed(1)}m)`,
+        `Speed: ${speedMps.toFixed(1)} m/s (${speedKmh.toFixed(1)} km/h)`,
+        `Equipped: ${vehicle.equipped ? 'Yes (RoadMesh app)' : 'No'}`,
+        `Advisory: ${hasWarn ? 'CAUTION: Queue ahead' : 'None'}`,
+        `Held Knowledge: ${kList.length > 0 ? kList.map(k => `${k.channel} (src:${k.sourceId})`).join(', ') : 'None'}`
+      ];
+
+      items.forEach(text => {
+        tooltip.appendChild(createElem('div', null, text));
+      });
+
+      const containerRect = elements.svgs[mode].getBoundingClientRect();
+      const left = Math.min(containerRect.width - 260, Math.max(10, sx + 10));
+      const top = Math.min(containerRect.height - 130, Math.max(10, sy - 40));
+
+      tooltip.style.left = `${left}px`;
+      tooltip.style.top = `${top}px`;
+      tooltip.style.display = 'block';
+    }
+
+    // Vehicle Selection
+    function selectVehicle(id) {
+      state.selectedVehicleId = (state.selectedVehicleId === id) ? null : id;
+      renderFrameAtCurrentTime();
+    }
+
+    function updateSelectedVehicleInspector() {
+      if (!state.selectedVehicleId) {
+        elements.vehicleInspector.style.display = 'none';
+        return;
+      }
+
+      elements.vehicleInspector.style.display = 'block';
+      elements.inspVehId.textContent = state.selectedVehicleId;
+
+      ['no_advice', 'local_only', 'mesh_informed'].forEach(mode => {
+        const frame = getFrameForMode(mode, state.currentTime);
+        const container = mode === 'no_advice' ? elements.inspStateNoAdvice
+          : (mode === 'local_only' ? elements.inspStateLocalOnly : elements.inspStateMeshInformed);
+
+        container.replaceChildren();
+
+        const v = frame?.vehicles?.find(veh => veh.id === state.selectedVehicleId);
+        if (!v) {
+          container.appendChild(createElem('span', { style: 'color:var(--text-dim);' }, 'Not active in this frame'));
+          return;
+        }
+
+        const hasWarn = Array.isArray(frame.warnings) && frame.warnings.includes(v.id);
+        const kCount = (Array.isArray(frame.knowledge) ? frame.knowledge.filter(k => k.recipientId === v.id).length : 0);
+
+        const lines = [
+          `Pos: (${v.x.toFixed(1)}, ${v.y.toFixed(1)})`,
+          `Speed: ${v.speed.toFixed(1)} m/s (${(v.speed * 3.6).toFixed(1)} km/h)`,
+          `Equipped: ${v.equipped ? 'Yes' : 'No'}`,
+          `Warning: ${hasWarn ? 'ACTIVE' : 'None'}`,
+          `Retained Knowledge: ${kCount} record(s)`
+        ];
+
+        lines.forEach(line => {
+          container.appendChild(createElem('div', null, line));
+        });
+      });
+    }
+
+    // Render Frame Inspection Tables (Warnings and Knowledge at current second)
+    function renderFrameTables(warnings, knowledge) {
+      // Warnings Table
+      elements.tbodyFrameWarnings.replaceChildren();
+      if (warnings.length === 0) {
+        const tr = createElem('tr');
+        const td = createElem('td', { colspan: '7', style: 'color:var(--text-dim); text-align:center;' }, 'No cautions issued since the preceding frame');
+        tr.appendChild(td);
+        elements.tbodyFrameWarnings.appendChild(tr);
+      } else {
+        warnings.forEach(w => {
+          const tr = createElem('tr');
+          tr.appendChild(createElem('td', null, w.mode));
+          tr.appendChild(createElem('td', { style: 'font-family:var(--font-mono); font-weight:600;' }, w.recipientId));
+          tr.appendChild(createElem('td', { style: 'font-family:var(--font-mono);' }, w.sourceId));
+
+          const tdChan = createElem('td');
+          tdChan.appendChild(createElem('span', { class: `tag-channel ${w.channel}` }, w.channel));
+          tr.appendChild(tdChan);
+
+          tr.appendChild(createElem('td', { class: 'num-cell' }, isFiniteNum(w.aheadDistanceM) ? `${w.aheadDistanceM.toFixed(1)} m` : '--'));
+          tr.appendChild(createElem('td', { class: 'num-cell' }, isFiniteNum(w.leadS) ? `${w.leadS.toFixed(1)} s` : '--'));
+
+          let outcomeText = 'Ignored';
+          if (w.responded) {
+            outcomeText = isFiniteNum(w.responseAppliedAt) ? `Applied (t=${w.responseAppliedAt.toFixed(1)}s)` : 'Applied';
+          } else if (w.responseAccepted) {
+            outcomeText = 'Accepted; not applied by horizon';
+          }
+          tr.appendChild(createElem('td', null, outcomeText));
+          elements.tbodyFrameWarnings.appendChild(tr);
+        });
+      }
+
+      // Knowledge Table
+      elements.tbodyFrameKnowledge.replaceChildren();
+      if (knowledge.length === 0) {
+        const tr = createElem('tr');
+        const td = createElem('td', { colspan: '6', style: 'color:var(--text-dim); text-align:center;' }, 'No retained observations at this frame');
+        tr.appendChild(td);
+        elements.tbodyFrameKnowledge.appendChild(tr);
+      } else {
+        knowledge.forEach(k => {
+          const tr = createElem('tr');
+          tr.appendChild(createElem('td', null, k.mode));
+          tr.appendChild(createElem('td', { style: 'font-family:var(--font-mono); font-weight:600;' }, k.recipientId));
+          tr.appendChild(createElem('td', { style: 'font-family:var(--font-mono);' }, k.sourceId));
+
+          const tdChan = createElem('td');
+          tdChan.appendChild(createElem('span', { class: `tag-channel ${k.channel}` }, k.channel));
+          tr.appendChild(tdChan);
+
+          tr.appendChild(createElem('td', { class: 'num-cell' }, String(k.capturedAt)));
+          tr.appendChild(createElem('td', { class: 'num-cell' }, String(k.expiresAt)));
+          elements.tbodyFrameKnowledge.appendChild(tr);
+        });
+      }
+    }
+
+    // Complete Metrics Definitions matching CONTRACT.md and model.py
+    const METRIC_DEFINITIONS = [
+      { key: 'scheduledVehicles', name: 'Scheduled Vehicles', unit: 'vehicles', desc: 'Total demand inserted or attempted' },
+      { key: 'arrivedVehicles', name: 'Arrived Vehicles', unit: 'vehicles', desc: 'Completed trips reaching destination' },
+      { key: 'activeVehicles', name: 'Active Vehicles', unit: 'vehicles', desc: 'Vehicles currently on network at end' },
+      { key: 'pendingVehicles', name: 'Pending Vehicles', unit: 'vehicles', desc: 'Vehicles waiting in insertion queue' },
+      { key: 'futureVehicles', name: 'Future Vehicles', unit: 'vehicles', desc: 'Vehicles not yet due for departure' },
+      { key: 'totalDelayS', name: 'Total Delay', unit: 'seconds', desc: 'Fixed-horizon active speed deficit plus source waiting' },
+      { key: 'spillbackDurationS', name: 'Buffer Exposure', unit: 'seconds', desc: 'Stopped connector extent enters 15 m upstream buffer' },
+      { key: 'maxQueueExtentM', name: 'Max Queue Extent', unit: 'metres', desc: 'Peak connector stopped extent; excludes upstream approach' },
+      { key: 'maxCorridorStoppedExtentM', name: 'Upstream Stopped Extent', unit: 'metres', desc: 'Includes approach; not necessarily a contiguous queue' },
+      { key: 'maxSourceBacklog', name: 'Peak Source Backlog', unit: 'vehicles', desc: 'Due but not yet inserted, including step quantization' },
+      { key: 'capActiveVehicleSeconds', name: 'Cap Active Duration', unit: 'vehicle-seconds', desc: 'Time the response cap was applied, whether binding or not' },
+      { key: 'capActivationsAboveLimit', name: 'Cap Activations Above Limit', unit: 'events', desc: 'Speed exceeded cap at activation; not a causal effect estimate' },
+      { key: 'meanKinematicLeadS', name: 'Constant-speed Time to Report', unit: 'seconds', desc: 'Distance/current speed at caution; not TTC' },
+      { key: 'stopsBeforeReportCrossing', name: 'Stops Before Report Crossing', unit: 'warnings', desc: 'Subsequent recipient stop before crossing historical location' },
+      { key: 'advisoryCount', name: 'Advisory Count', unit: 'warnings', desc: 'Total cautions emitted by policy' },
+      { key: 'deliveredMessages', name: 'Delivered Messages', unit: 'messages', desc: 'Logical cache admissions, not radio receipts' },
+      { key: 'expiredMessages', name: 'Expired Messages', unit: 'messages', desc: 'Lifetime-rejected forwards/in-flight records; normal cache expiry excluded' },
+      { key: 'droppedMessages', name: 'Dropped Messages', unit: 'messages', desc: 'Messages lost to channel/capacity' },
+      { key: 'duplicateMessages', name: 'Duplicate Messages', unit: 'messages', desc: 'Duplicate messages suppressed' },
+      { key: 'maxPendingMessages', name: 'Peak Pending Messages', unit: 'messages', desc: 'Max queue size in transmission buffer' },
+      { key: 'usefulWarnings', name: 'Crossing-delay Threshold', unit: 'warnings', desc: 'Observed historical-position crossing delay >= response delay; not usefulness' },
+      { key: 'meanWarningLeadS', name: 'Mean Report-position Crossing Delay', unit: 'seconds', desc: 'Includes waiting at red; only resolved crossings, see censored count' },
+      { key: 'responsesApplied', name: 'Responses Applied', unit: 'events', desc: 'Speed caps initiated upon caution' },
+      { key: 'censoredWarnings', name: 'Censored Warnings', unit: 'warnings', desc: 'Warnings truncated by time horizon' },
+      { key: 'conservationErrors', name: 'Conservation Errors', unit: 'vehicles', desc: 'Failed accounting checks including future, source backlog and SUMO counters' },
+      { key: 'teleports', name: 'SUMO Teleports', unit: 'events', desc: 'Gridlock emergency jumps' },
+      { key: 'collisions', name: 'Colliding-vehicle Samples', unit: 'samples', desc: 'SUMO diagnostic, not unique crashes or a safety result' },
+      { key: 'fingerprint', name: 'Run Fingerprint', unit: 'hash', desc: 'Reproducibility digest string' }
+    ];
+
+    function renderMetricsComparisonTable() {
+      elements.tbodyMetricsCompare.replaceChildren();
+
+      METRIC_DEFINITIONS.forEach(def => {
+        const tr = createElem('tr');
+
+        const tdName = createElem('td', { style: 'font-weight:600;' }, def.name);
+        const tdDesc = createElem('td', { style: 'color:var(--text-dim); font-size:12px;' }, `${def.desc} (${def.unit})`);
+        tr.appendChild(tdName);
+        tr.appendChild(tdDesc);
+
+        ['no_advice', 'local_only', 'mesh_informed'].forEach(mode => {
+          const run = state.runsByMode[mode];
+          let val = run?.metrics ? run.metrics[def.key] : undefined;
+          if (def.key === 'fingerprint' && run) {
+            val = run.fingerprint;
+          }
+
+          let displayVal = '--';
+          let alertStyle = '';
+
+          if (val === null) {
+            displayVal = 'None / Unobserved';
+          } else if (typeof val === 'number') {
+            displayVal = Number.isInteger(val) ? String(val) : val.toFixed(2);
+            if ((def.key === 'conservationErrors' || def.key === 'teleports') && val > 0) {
+              alertStyle = 'color:var(--color-warn); font-weight:bold;';
+            }
+          } else if (typeof val === 'string') {
+            displayVal = val;
+          }
+
+          const tdVal = createElem('td', { class: 'num-cell', style: alertStyle }, displayVal);
+          tr.appendChild(tdVal);
+        });
+
+        elements.tbodyMetricsCompare.appendChild(tr);
+      });
+    }
+
+    // Render Multi-run Summary Table (handling data.summary or calculating from runs)
+    function renderSummaryTable(data) {
+      elements.tbodySummary.replaceChildren();
+
+      const modes = ['no_advice', 'local_only', 'mesh_informed'];
+
+      modes.forEach(mode => {
+        const runs = data.runs.filter(r => r.mode === mode);
+        const tr = createElem('tr');
+
+        const tdMode = createElem('td', { style: 'font-weight:700;' }, mode);
+        tr.appendChild(tdMode);
+
+        const summaryModeObj = null; // Recompute from validated runs, never trust a supplied summary.
+
+        const getStats = (key) => {
+          if (summaryModeObj && summaryModeObj[key]) {
+            const m = summaryModeObj[key];
+            if (isFiniteNum(m.mean)) {
+              return {
+                mean: m.mean,
+                min: isFiniteNum(m.min) ? m.min : m.mean,
+                max: isFiniteNum(m.max) ? m.max : m.mean
+              };
+            }
+          }
+          const vals = runs.map(r => r.metrics?.[key]).filter(isFiniteNum);
+          if (vals.length === 0) return null;
+          return {
+            mean: vals.reduce((a, b) => a + b, 0) / vals.length,
+            min: Math.min(...vals),
+            max: Math.max(...vals)
+          };
+        };
+
+        const fmtStat = (stat, unit) => {
+          if (!stat) return '--';
+          return `${stat.mean.toFixed(1)}${unit} [${stat.min.toFixed(1)}, ${stat.max.toFixed(1)}]`;
+        };
+        const fmtMean = (stat) => {
+          if (!stat) return '--';
+          return stat.mean.toFixed(1);
+        };
+
+        const delayStat = getStats('totalDelayS');
+        const spillStat = getStats('spillbackDurationS');
+        const queueStat = getStats('maxQueueExtentM');
+        const advStat = getStats('advisoryCount');
+        const delivStat = getStats('deliveredMessages');
+        const useStat = getStats('usefulWarnings');
+
+        const errors = runs.reduce((acc, r) => acc + (r.metrics?.conservationErrors || 0), 0);
+        const teleports = runs.reduce((acc, r) => acc + (r.metrics?.teleports || 0), 0);
+
+        tr.appendChild(createElem('td', { class: 'num-cell' }, fmtStat(delayStat, 's')));
+        tr.appendChild(createElem('td', { class: 'num-cell' }, fmtStat(spillStat, 's')));
+        tr.appendChild(createElem('td', { class: 'num-cell' }, fmtStat(queueStat, 'm')));
+        tr.appendChild(createElem('td', { class: 'num-cell' }, fmtMean(advStat)));
+        tr.appendChild(createElem('td', { class: 'num-cell' }, fmtMean(delivStat)));
+        tr.appendChild(createElem('td', { class: 'num-cell' }, fmtMean(useStat)));
+        tr.appendChild(createElem('td', { class: 'num-cell' }, `${errors} err / ${teleports} tp`));
+
+        elements.tbodySummary.appendChild(tr);
+      });
+    }
+
+    // Render All Warnings Table for Selected Seed
+    function renderAllWarningsTable() {
+      elements.tbodyAllWarnings.replaceChildren();
+
+      const selectedModeFilter = elements.filterWarningsMode.value;
+      const allWarnings = [];
+
+      ['local_only', 'mesh_informed'].forEach(mode => {
+        if (selectedModeFilter !== 'all' && selectedModeFilter !== mode) return;
+        const run = state.runsByMode[mode];
+        if (run && Array.isArray(run.warnings)) {
+          run.warnings.forEach(w => {
+            allWarnings.push({ ...w, mode });
+          });
+        }
+      });
+
+      allWarnings.sort((a, b) => (a.time - b.time));
+
+      if (allWarnings.length === 0) {
+        const tr = createElem('tr');
+        tr.appendChild(createElem('td', { colspan: '9', style: 'color:var(--text-dim); text-align:center;' }, 'No advisories emitted in this run'));
+        elements.tbodyAllWarnings.appendChild(tr);
+        return;
+      }
+
+      allWarnings.forEach(w => {
+        const tr = createElem('tr');
+        tr.appendChild(createElem('td', { class: 'num-cell' }, `${w.time.toFixed(1)}s`));
+        tr.appendChild(createElem('td', null, w.mode));
+        tr.appendChild(createElem('td', { style: 'font-family:var(--font-mono); font-weight:600;' }, w.recipientId));
+        tr.appendChild(createElem('td', { style: 'font-family:var(--font-mono);' }, w.sourceId));
+        tr.appendChild(createElem('td', { style: 'font-family:var(--font-mono); font-size:11px;' }, w.eventId || 'N/A'));
+
+        const tdChan = createElem('td');
+        tdChan.appendChild(createElem('span', { class: `tag-channel ${w.channel}` }, w.channel));
+        tr.appendChild(tdChan);
+
+        tr.appendChild(createElem('td', { class: 'num-cell' }, isFiniteNum(w.aheadDistanceM) ? `${w.aheadDistanceM.toFixed(1)} m` : '--'));
+        tr.appendChild(createElem('td', { class: 'num-cell' }, isFiniteNum(w.leadS) ? `${w.leadS.toFixed(1)} s` : '--'));
+
+        let outcomeText = 'Ignored';
+        if (w.responded) {
+          outcomeText = isFiniteNum(w.responseAppliedAt) ? `Applied (t=${w.responseAppliedAt.toFixed(1)}s)` : 'Applied';
+        } else if (w.responseAccepted) {
+          outcomeText = 'Accepted; not applied by horizon';
+        }
+        tr.appendChild(createElem('td', null, outcomeText));
+
+        tr.style.cursor = 'pointer';
+        tr.title = `Click to jump to t = ${w.time}s`;
+        tr.addEventListener('click', () => {
+          // Find closest timeIndex
+          let bestIdx = 0;
+          let bestDiff = Infinity;
+          state.availableTimes.forEach((t, i) => {
+            const diff = Math.abs(t - w.time);
+            if (diff < bestDiff) {
+              bestDiff = diff;
+              bestIdx = i;
+            }
+          });
+          seekIndex(bestIdx);
+          selectVehicle(w.recipientId);
+        });
+
+        elements.tbodyAllWarnings.appendChild(tr);
+      });
+    }
+
+    // Auto-fetch sample-results.json beside viewer
+    async function fetchSampleResults(isManualClick) {
+      try {
+        const res = await fetch('./sample-results.json', { cache: 'no-store' });
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status} ${res.statusText}`);
+        }
+        const json = await res.json();
+        loadDataset(json, 'sample-results.json (Auto-loaded)');
+      } catch (err) {
+        const reason = err.message || 'fetch failed or blocked by file:// CORS';
+        showNotice(
+          'info',
+          `No local sample-results.json auto-loaded (${reason}). This is expected when opened directly from a file:// URL or prior to running simulation jobs. Please select a JSON result file using "Load Results JSON" or drop it here.`
+        );
+      }
+    }
+
+    // Check optional embedded JSON inside <script id="junction-data" type="application/json">
+    function checkEmbeddedData() {
+      const embeddedScript = document.getElementById('junction-data');
+      if (embeddedScript) {
+        const rawText = (embeddedScript.textContent || '').trim();
+        if (rawText.length > 0) {
+          try {
+            const parsed = JSON.parse(rawText);
+            const ok = loadDataset(parsed, 'Embedded Dataset (Self-Contained Report)');
+            if (ok) return true;
+          } catch (err) {
+            showNotice('error', 'Malformed embedded JSON in <script id="junction-data">: ' + err.message);
+          }
+        }
+      }
+      return false;
+    }
+
+    // File input handlers
+    function handleFile(file) {
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const json = JSON.parse(e.target.result);
+          loadDataset(json, file.name);
+        } catch (err) {
+          showNotice('error', `JSON parse error in "${file.name}": ${err.message}`);
+        }
+      };
+      reader.onerror = () => {
+        showNotice('error', `Failed to read file "${file.name}".`);
+      };
+      reader.readAsText(file);
+    }
+
+    // Attach Event Listeners
+    function initListeners() {
+      // File Browse
+      elements.btnBrowseFile.addEventListener('click', () => elements.filePicker.click());
+      elements.btnDropzonePick.addEventListener('click', () => elements.filePicker.click());
+      elements.filePicker.addEventListener('change', (ev) => {
+        if (ev.target.files && ev.target.files[0]) {
+          handleFile(ev.target.files[0]);
+        }
+      });
+
+      // Reload Sample button
+      elements.btnReloadSample.addEventListener('click', () => fetchSampleResults(true));
+
+      // Drag and drop
+      window.addEventListener('dragover', (ev) => {
+        ev.preventDefault();
+        elements.emptyDropzone.classList.add('drag-over');
+      });
+      window.addEventListener('dragleave', (ev) => {
+        if (ev.relatedTarget === null) {
+          elements.emptyDropzone.classList.remove('drag-over');
+        }
+      });
+      window.addEventListener('drop', (ev) => {
+        ev.preventDefault();
+        elements.emptyDropzone.classList.remove('drag-over');
+        if (ev.dataTransfer?.files && ev.dataTransfer.files[0]) {
+          handleFile(ev.dataTransfer.files[0]);
+        }
+      });
+
+      // Seed select
+      elements.seedSelect.addEventListener('change', (ev) => {
+        const val = Number(ev.target.value);
+        if (Number.isFinite(val)) {
+          selectSeed(val);
+        }
+      });
+
+      // Playback Controls
+      elements.btnPlayPause.addEventListener('click', () => {
+        if (state.isPlaying) pausePlayback();
+        else startPlayback();
+      });
+
+      elements.btnStepPrev.addEventListener('click', () => stepTime(-1));
+      elements.btnStepNext.addEventListener('click', () => stepTime(1));
+      elements.btnResetTime.addEventListener('click', () => {
+        pausePlayback();
+        seekIndex(0);
+      });
+
+      elements.timeSlider.addEventListener('input', (ev) => {
+        pausePlayback();
+        seekIndex(Number(ev.target.value));
+      });
+
+      elements.speedSelect.addEventListener('change', (ev) => {
+        state.playSpeed = parseFloat(ev.target.value) || 1.0;
+        if (state.isPlaying) {
+          pausePlayback();
+          startPlayback();
+        }
+      });
+
+      elements.loopToggle.addEventListener('change', (ev) => {
+        state.loop = ev.target.checked;
+      });
+
+      // Reduced motion toggle
+      elements.reducedMotionToggle.addEventListener('change', (ev) => {
+        state.reducedMotion = ev.target.checked;
+        if (state.reducedMotion) {
+          document.body.classList.add('reduced-motion');
+        } else {
+          document.body.classList.remove('reduced-motion');
+        }
+      });
+
+      // Keyboard shortcuts
+      window.addEventListener('keydown', (ev) => {
+        if (ev.target.tagName === 'INPUT' || ev.target.tagName === 'SELECT' || ev.target.tagName === 'TEXTAREA') return;
+        if (ev.code === 'Space') {
+          ev.preventDefault();
+          if (state.isPlaying) pausePlayback();
+          else startPlayback();
+        } else if (ev.code === 'ArrowLeft') {
+          ev.preventDefault();
+          stepTime(-1);
+        } else if (ev.code === 'ArrowRight') {
+          ev.preventDefault();
+          stepTime(1);
+        } else if (ev.code === 'Home') {
+          ev.preventDefault();
+          pausePlayback();
+          seekIndex(0);
+        }
+      });
+
+      // Tabs switching
+      elements.tabBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+          elements.tabBtns.forEach(b => b.classList.remove('active'));
+          elements.tabPanes.forEach(p => p.classList.remove('active'));
+
+          btn.classList.add('active');
+          const targetTabId = btn.getAttribute('data-tab');
+          const pane = document.getElementById(targetTabId);
+          if (pane) pane.classList.add('active');
+        });
+      });
+
+      // Clear vehicle selection
+      elements.inspClearBtn.addEventListener('click', () => {
+        state.selectedVehicleId = null;
+        renderFrameAtCurrentTime();
+      });
+
+      // Filter warnings table
+      elements.filterWarningsMode.addEventListener('change', () => {
+        renderAllWarningsTable();
+      });
+    }
+
+    // Startup sequence:
+    // 1. Initialize listeners
+    // 2. Check for embedded data in <script id="junction-data">
+    // 3. If absent, attempt auto-load from ./sample-results.json with visible fallback
+    initListeners();
+    const hasEmbedded = checkEmbeddedData();
+    if (!hasEmbedded) {
+      fetchSampleResults(false);
+    }
+
+  })();
+  </script>
+</body>
+</html>

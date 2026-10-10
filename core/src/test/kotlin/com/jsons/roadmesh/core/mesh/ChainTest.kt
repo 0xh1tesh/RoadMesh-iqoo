@@ -114,9 +114,12 @@ class ChainTest {
         val phones = (1L..5L).map { Phone(it, it * 2_000) }
         meet(phones)
         val now = clock.mono
-        phones[0].map.add(HazardKind.POTHOLE, stageFix(0).let { it.copy(lat = it.lat + 40 / 111_195.0) }, NodeId(1), now, 0.8, own = true)
-        phones[1].map.add(HazardKind.POTHOLE, stageFix(0).let { it.copy(lat = it.lat + 45 / 111_195.0) }, NodeId(2), now, 0.6, own = true)
-        phones[4].map.add(HazardKind.ACCIDENT, stageFix(4).let { it.copy(lat = it.lat - 50 / 111_195.0) }, NodeId(5), now, 0.7, own = true)
+        phones[0].map.add(HazardKind.POTHOLE, stageFix(0).let { it.copy(lat = it.lat + 40 / 111_195.0) }, NodeId(1), now, 0.8, own = true,
+            observationId = MessageId(NodeId(1), 1, 1), capturedUtcMs = 1_000_000, provenance = Provenance.REPLAY)
+        phones[1].map.add(HazardKind.POTHOLE, stageFix(0).let { it.copy(lat = it.lat + 45 / 111_195.0) }, NodeId(2), now, 0.6, own = true,
+            observationId = MessageId(NodeId(2), 1, 1), capturedUtcMs = 1_000_000, provenance = Provenance.REPLAY)
+        phones[4].map.add(HazardKind.ACCIDENT, stageFix(4).let { it.copy(lat = it.lat - 50 / 111_195.0) }, NodeId(5), now, 0.7, own = true,
+            observationId = MessageId(NodeId(5), 1, 1), capturedUtcMs = 1_000_000, provenance = Provenance.REPLAY)
         val asker = phones[2]
         var air: List<Pair<Phone, ControlFrame>> = listOf(asker to asker.queries.ask(stageFix(2).copy(speedMps = 12.0), now))
         repeat(10) {
@@ -141,14 +144,14 @@ class ChainTest {
         assertTrue(picture.facts().contains("Behind: accident"))
     }
 
-    @Test fun slowdownAheadGivesAMeetingTimeAndAGentlerSpeed() {
+    @Test fun slowdownAheadGivesCautionWithoutAnUncalibratedClearanceOrSpeedPromise() {
         val f = RoadPicture.forecast(14.0, listOf(com.jsons.roadmesh.core.road.PicturePeer(NodeId(1), 0, 400, 2.0, 1, 0)), emptyList())
         assertEquals(400, f.slowdownAheadM)
-        assertEquals(400 / (14.0 + 4.5), f.meetS!!, 0.01)
-        assertTrue("recommends easing off below the current 50 km/h", f.recommendedKmh!! < 50 && f.recommendedKmh >= 15)
-        assertTrue(f.advice.any { it.contains("avoid braking hard") })
+        assertNull(f.meetS)
+        assertNull(f.recommendedKmh)
+        assertTrue(f.advice.any { it.contains("Clearance time is unknown") })
         val clear = RoadPicture.forecast(14.0, emptyList(), emptyList())
-        assertNull(clear.slowdownAheadM); assertTrue(clear.advice.single().startsWith("Nothing reported"))
+        assertNull(clear.slowdownAheadM); assertTrue(clear.advice.single().contains("does not establish that it is clear"))
     }
 
     @Test fun roadMapMergesRepeatsAndCountsDistinctReporters() {

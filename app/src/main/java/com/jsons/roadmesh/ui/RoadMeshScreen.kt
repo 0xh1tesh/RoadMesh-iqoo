@@ -26,6 +26,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -66,16 +67,19 @@ private val Role.letter get() = ('A'.code + ordinal).toChar()
 private fun SessionState.me() = if (rank != NO_RANK) rankLetter(rank) else role.letter.toString()
 private fun SessionState.next() = if (rank != NO_RANK && chain.size > rank + 1) rankLetter(rank + 1) else "the phone behind"
 
-@Composable fun RoadMeshScreen(app: RoadMeshApplication, start: () -> Unit, stop: () -> Unit, scene: () -> Unit) {
+@Composable fun RoadMeshScreen(app: RoadMeshApplication, start: () -> Unit, stop: () -> Unit, scene: () -> Unit,
+                              startDrive: () -> Unit = start, stopDrive: () -> Unit = stop, startReplay: () -> Unit = start) {
     RoadMeshTheme {
-        Surface(Modifier.fillMaxSize(), color = Tokens.Ink) { Root(app, start, stop, scene) }
+        Surface(Modifier.fillMaxSize(), color = Tokens.Ink) { Root(app, start, stop, scene, startDrive, stopDrive, startReplay) }
     }
 }
 
 internal class Actions(val start: () -> Unit, val stop: () -> Unit, val logs: () -> Unit, val settings: () -> Unit, val check: () -> Unit,
-                       val importModel: () -> Unit, val pickVideo: () -> Unit, val scene: () -> Unit, val setup: () -> Unit, val npu: () -> Unit = {})
+                       val importModel: () -> Unit, val pickVideo: () -> Unit, val scene: () -> Unit, val setup: () -> Unit, val npu: () -> Unit = {},
+                       val startDrive: () -> Unit = start, val stopDrive: () -> Unit = stop, val startReplay: () -> Unit = start)
 
-@Composable private fun Root(app: RoadMeshApplication, start: () -> Unit, stop: () -> Unit, scene: () -> Unit) {
+@Composable private fun Root(app: RoadMeshApplication, start: () -> Unit, stop: () -> Unit, scene: () -> Unit,
+                             startDrive: () -> Unit, stopDrive: () -> Unit, startReplay: () -> Unit) {
     val mesh = app.session
     val state by mesh.state.collectAsState()
     val copilot by app.copilot.flow.collectAsState()
@@ -90,11 +94,11 @@ internal class Actions(val start: () -> Unit, val stop: () -> Unit, val logs: ()
     }
     val actions = Actions(start = start, stop = stop, logs = { page = "logs" }, settings = { page = "settings" }, check = { page = "check" },
         importModel = { pickModel.launch(arrayOf("*/*")) }, pickVideo = { pickVideo.launch(arrayOf("video/*")) }, scene = scene,
-        setup = { app.observer.simulate(false); stop(); onboarded = false },
+        setup = { stopDrive(); app.observer.simulate(false); stop(); onboarded = false },
         npu = {
             com.jsons.roadmesh.perception.NpuProbeService.start(context)
             android.widget.Toast.makeText(context, "Testing the NPU in the background. Restart the dashcam simulation in a minute to use it.", android.widget.Toast.LENGTH_LONG).show()
-        })
+        }, startDrive = startDrive, stopDrive = stopDrive, startReplay = startReplay)
 
     when {
         !onboarded -> Onboarding(app.preferences.vehicle, state.role) { vehicle, role ->
@@ -118,41 +122,41 @@ private fun displayName(context: android.content.Context, uri: Uri) = runCatchin
 }.getOrNull()
 
 enum class Tab(val title: String, val icon: TabIcon) {
-    OBSERVE("Observe", TabIcon.OBSERVE), MESH("Relay", TabIcon.MESH), RECEIVED("Received", TabIcon.RECEIVED), REPORTS("Reports", TabIcon.REPORTS)
+    OBSERVE("Drive", TabIcon.OBSERVE), MESH("Mesh", TabIcon.MESH), RECEIVED("Road", TabIcon.RECEIVED), SWARM("Lab", TabIcon.RELAY), REPORTS("Events", TabIcon.REPORTS)
 }
 
 /* ---------- The tabs ---------- */
 
 @Composable internal fun MainTabs(app: RoadMeshApplication, state: SessionState, copilot: CopilotState, o: ObserverState, questions: List<Question>, actions: Actions) {
-    var tab by rememberSaveable { mutableStateOf(when (state.role) { Role.OBSERVER -> Tab.OBSERVE; Role.RELAY -> Tab.MESH; Role.RECEIVER -> Tab.RECEIVED }) }
+    var tab by rememberSaveable { mutableStateOf(Tab.OBSERVE) }
     val reports by app.reports.flow.collectAsState()
-    LaunchedEffect(Unit) { if (!state.running) actions.start() }
     val now by produceState(SystemClock.elapsedRealtime()) { while (true) { value = SystemClock.elapsedRealtime(); delay(500) } }
-    val warned = state.events.any { !it.originated && now - it.atMs < 10_000 }
-    val received = state.events.count { !it.originated }
-    val passed = state.events.count { it.relayedAtMs != null || it.sentAtMs != null }
-    // The tab follows the role the chain gives this phone: A observes, the middle relays, the last receives.
-    LaunchedEffect(state.liveRole, state.chain.size > 1) {
-        if (state.chain.isNotEmpty()) tab = when (state.liveRole) { Role.OBSERVER -> Tab.OBSERVE; Role.RELAY -> Tab.MESH; Role.RECEIVER -> Tab.RECEIVED }
-    }
-    // A new warning brings the Received tab forward unless this phone is busy observing.
-    LaunchedEffect(state.events.firstOrNull { !it.originated }?.id) { if (received > 0 && tab != Tab.OBSERVE && state.liveRole == Role.RECEIVER) tab = Tab.RECEIVED }
+    val warned = recentDriveWarning(state, now) != null
+    val received = state.events.count { !it.originated && it.announced }
     Column(Modifier.fillMaxSize()) {
         SignalEdge(when { warned -> Tokens.Yellow; state.ready -> Tokens.Green; else -> Tokens.Red })
         Column(Modifier.weight(1f).safeDrawingPadding()) {
             TopBar(state, app.preferences.vehicle, actions)
             Box(Modifier.weight(1f)) {
-                when (tab) {
-                    Tab.OBSERVE -> ObserveTab(app, state, copilot, o, questions, actions)
+                // Keep the live camera surface attached while inspecting another foreground tab.
+                // Android lifecycle pause still stops capture; rank never appoints a single observer.
+                if (o.live || tab == Tab.OBSERVE) key("drive-surface") {
+                    Box(if (tab == Tab.OBSERVE) Modifier.fillMaxSize() else Modifier.fillMaxSize().clearAndSetSemantics { }) {
+                        ObserveTab(app, state, copilot, o, questions, actions)
+                    }
+                }
+                if (tab != Tab.OBSERVE) Box(Modifier.fillMaxSize().background(Tokens.Ink)) { when (tab) {
+                    Tab.OBSERVE -> Unit
                     Tab.MESH -> MeshTab(state, copilot, now, actions)
                     Tab.RECEIVED -> ReceivedTab(app, state, copilot, questions, now, actions)
+                    Tab.SWARM -> SwarmScreen(state, onAskRoad = { app.askRoad() })
                     Tab.REPORTS -> ReportsTab(app, reports)
-                }
+                } }
             }
             NavigationBar(containerColor = Tokens.Panel, tonalElevation = 0.dp) {
                 Tab.entries.forEach { t ->
                     val selected = t == tab
-                    val count = when (t) { Tab.OBSERVE -> o.raised.size; Tab.MESH -> state.chain.size; Tab.RECEIVED -> received; Tab.REPORTS -> reports.size }
+                    val count = when (t) { Tab.OBSERVE -> o.raised.size; Tab.MESH -> state.chain.size; Tab.RECEIVED -> received; Tab.SWARM -> 0; Tab.REPORTS -> reports.size }
                     NavigationBarItem(selected, { tab = t }, icon = {
                         BadgedBox(badge = { if (count > 0) Badge(containerColor = Tokens.Yellow, contentColor = Tokens.Ink) { Text("$count") } }) {
                             TabGlyph(t.icon, if (selected) Tokens.Ink else Tokens.Muted)
@@ -173,7 +177,7 @@ enum class Tab(val title: String, val icon: TabIcon) {
         Row(Modifier.background(Tokens.Panel, RoundedCornerShape(10.dp)).padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             RoleBadge(state.me().first(), roleColor(state.liveRole.ordinal), 20.dp)
-            Text("${state.liveRole.title} · ${vehicle.title}", fontSize = 13.sp, color = Tokens.Secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("${if (state.mode == Mode.ROAD) "Road" else "Replay"} · ${vehicle.title}", fontSize = 13.sp, color = Tokens.Secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Spacer(Modifier.weight(1f))
         if (state.running) StatusDot(if (state.ready) Tokens.Green else Tokens.Yellow, if (state.ready) "Mesh live" else "Starting")
@@ -209,92 +213,104 @@ enum class Tab(val title: String, val icon: TabIcon) {
 /* ---------- Observe ---------- */
 
 @Composable private fun ObserveTab(app: RoadMeshApplication, state: SessionState, copilot: CopilotState, o: ObserverState, questions: List<Question>, actions: Actions) {
-    if (!o.simulating) {
+    if (!o.live && !o.simulating) {
         TabColumn {
-            HowTo(state)
-            if (state.ready && state.liveRole == Role.OBSERVER) TestWarnings(app, state)
-            Heading("Observe the road", "This phone becomes the dashcam and leads the chain. YOLO finds potholes, accidents, people on the road and traffic violations; hazards go to every phone behind, violations go to the report log. " +
-                "Or turn it round: the driver monitor watches your face and sends an SOS if you fall asleep or pass out.")
-            Surface(shape = RoundedCornerShape(24.dp), color = Tokens.Panel, modifier = Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    RoadScene(Modifier.fillMaxWidth().height(170.dp), highlight = state.liveRole.ordinal)
-                    Text("Simulate dashcam", fontWeight = FontWeight.ExtraBold, fontSize = 20.sp)
-                    com.jsons.roadmesh.perception.DashcamObserver.CLIPS.forEach { (asset, label) ->
-                        val on = o.source == label
-                        Surface(onClick = { app.observer.use(null, label, asset) }, shape = RoundedCornerShape(12.dp), color = if (on) Tokens.Raised else Tokens.Ink,
-                            border = BorderStroke(if (on) 2.dp else 1.dp, if (on) Tokens.Yellow else Tokens.Line), modifier = Modifier.fillMaxWidth()) {
-                            Text(label, fontSize = 14.sp, color = if (on) Tokens.Yellow else Tokens.Secondary, modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
-                        }
+            DriveWelcome(state, o, actions)
+            var replayTools by rememberSaveable { mutableStateOf(false) }
+            GhostButton(if (replayTools) "Hide replay lab" else "Open replay lab", { replayTools = !replayTools }, Modifier.fillMaxWidth())
+            if (replayTools) {
+                Text("REPLAY · NOT LIVE ROAD INPUT", fontFamily = Michroma, fontSize = 11.sp, color = Tokens.Yellow)
+                Text("Run local detection on a bundled or recorded clip. Replay observations remain separate from live road evidence.", color = Tokens.Muted, fontSize = 14.sp)
+                com.jsons.roadmesh.perception.DashcamObserver.CLIPS.forEach { (asset, label) ->
+                    val selected = o.source == label
+                    Surface(onClick = { app.observer.use(null, label, asset) }, shape = RoundedCornerShape(12.dp), color = Tokens.Panel,
+                        border = BorderStroke(if (selected) 2.dp else 1.dp, if (selected) Tokens.Yellow else Tokens.Line), modifier = Modifier.fillMaxWidth()) {
+                        Text(label, fontSize = 14.sp, color = if (selected) Tokens.Yellow else Tokens.Secondary, modifier = Modifier.padding(12.dp))
                     }
-                    val driver = o.source == DriverMonitor.LABEL
-                    PrimaryButton(if (driver) "Start driver monitor" else "Play simulation", { app.observer.simulate(true) }, Modifier.fillMaxWidth())
-                    GhostButton("Choose another video", actions.pickVideo, Modifier.fillMaxWidth())
                 }
+                if (o.source == DriverMonitor.LABEL) PrimaryButton("Start driver monitor", { app.observer.simulate(true) }, Modifier.fillMaxWidth())
+                else PrimaryButton("Start replay demo", actions.startReplay, Modifier.fillMaxWidth())
+                GhostButton("Choose a recorded video", actions.pickVideo, Modifier.fillMaxWidth())
+                GhostButton("Open 3D brake scene", actions.scene, Modifier.fillMaxWidth())
+                if (state.mode == Mode.STAGE && state.ready) TestWarnings(app, state)
             }
             CopilotStatus(copilot, actions)
-            AskPanel(questions, copilot, app::ask)
         }
         return
     }
     if (o.source == DriverMonitor.LABEL) { DriverMonitorView(app); return }
-    val recent = o.raised.firstOrNull()?.takeIf { SystemClock.elapsedRealtime() - it.atMs < 3_500 }
+    val recent = o.raised.firstOrNull()?.takeIf { SystemClock.elapsedRealtime() - it.atMs in 0..3_500 }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val landscape = maxWidth > maxHeight
         val video = @Composable { m: Modifier ->
             Box(m.background(Color.Black)) {
                 VideoPane(app, o, Modifier.align(Alignment.Center))
-                HazardFlash(recent, Modifier.align(Alignment.TopCenter).padding(top = 10.dp))
+                HazardFlash(recent, Modifier.align(Alignment.TopCenter).padding(top = 40.dp))
+                Text(if (o.live) "LIVE REAR CAMERA" else "REPLAY · ${o.source}", color = Tokens.Ink, fontWeight = FontWeight.Bold,
+                    fontSize = 11.sp, modifier = Modifier.align(Alignment.TopStart).padding(8.dp).background(Tokens.Yellow, RoundedCornerShape(6.dp)).padding(6.dp))
                 PerfChip(o, Modifier.align(Alignment.BottomStart).padding(8.dp))
             }
         }
+        val panel = @Composable {
+            DrivePipeline(state, o)
+            DriveIncomingWarning(state)
+            ObservePanel(app, o, copilot, questions, actions)
+        }
         if (landscape) Row(Modifier.fillMaxSize()) {
             video(Modifier.weight(1f).fillMaxHeight())
-            Column(Modifier.width(380.dp).fillMaxHeight().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                ObservePanel(app, o, copilot, questions, actions)
-            }
+            Column(Modifier.width(350.dp).fillMaxHeight().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) { panel() }
         } else Column(Modifier.fillMaxSize()) {
-            video(Modifier.fillMaxWidth())
-            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                ObservePanel(app, o, copilot, questions, actions)
-            }
+            video(Modifier.fillMaxWidth().aspectRatio(16f / 9f))
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) { panel() }
         }
     }
 }
 
 @Composable internal fun ObservePanel(app: RoadMeshApplication, o: ObserverState, copilot: CopilotState, questions: List<Question>, actions: Actions) {
     o.error?.let { Text(it, color = Tokens.Red, fontSize = 14.sp) }
-    val hazardLine = o.raised.firstOrNull()?.let { copilot.lines["hazard:${it.call.atS}"] }
+    val hazardLine = o.raised.firstOrNull()?.let { copilot.lines[it.explanationTag ?: "hazard:${it.call.atS}"] }
     val live = listOfNotNull(hazardLine?.takeIf { !it.done || o.raised.first().let { r -> SystemClock.elapsedRealtime() - r.atMs < 12_000 } }, copilot.latestScene).firstOrNull()
     LiveAnalysis(live, copilot, actions)
-    Row(horizontalArrangement = Arrangement.spacedBy(22.dp), verticalAlignment = Alignment.Bottom) {
-        Metric(o.lead?.let { "${it.distanceM.toInt()} m" } ?: "—", o.lead?.let { "${it.subject.cls.name.lowercase()} ahead" } ?: "lane clear", Tokens.Yellow)
-        Metric(o.lead?.ttcS?.let { "%.1f s".format(it) } ?: "steady", "to contact")
-        Metric("${o.overlays.size}", "tracked")
+    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) {
+        Metric(o.lead?.let { "${it.distanceM.toInt()} m" } ?: "—", o.lead?.let { "estimated ${it.subject.cls.name.lowercase()} gap" } ?: "lead vehicle unknown", Tokens.Yellow, Modifier.weight(1f))
+        Metric(o.lead?.ttcS?.let { "%.1f s".format(it) } ?: "—", "optical approach estimate", modifier = Modifier.weight(1f))
+        Metric("${o.overlays.size}", "tracked", modifier = Modifier.weight(1f))
     }
     Text(counts(o.counts), color = Tokens.Muted, fontSize = 14.sp)
     Text("3D FRAME", fontFamily = Michroma, fontSize = 11.sp, letterSpacing = 1.sp, color = Tokens.Yellow)
     BirdsEye3D(o.overlays, Modifier.background(Tokens.Panel, RoundedCornerShape(16.dp)))
-    Text("Top view from size-based distance estimates. Yellow: in your lane. Red: the hazard just sent.", color = Tokens.Faint, fontSize = 12.sp)
+    Text("Size-based distance estimates, not measured depth. Yellow: approximate forward corridor. Red: event candidate.", color = Tokens.Faint, fontSize = 12.sp)
     AskPanel(questions, copilot, app::ask)
-    Text("Sent to the mesh", style = MaterialTheme.typography.titleMedium)
-    if (o.raised.isEmpty()) Text("Nothing yet. Potholes, accidents, people in the lane, wrong-side vehicles and hard braking go to the phones behind; triple riding, riders without helmets and red-light jumping are logged as reports.",
+    Text("Automatic event decisions", style = MaterialTheme.typography.titleMedium)
+    if (o.raised.isEmpty()) Text("No event raised in this session. Local detections and motion history are evaluated automatically; no incident report tap is required. Missing detections do not mean the road is clear.",
         color = Tokens.Faint, fontSize = 14.sp, lineHeight = 20.sp)
-    o.raised.forEach { r -> RaisedRow(r) }
-    Text("Clip: ${o.source}", color = Tokens.Faint, fontSize = 12.sp)
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        PrimaryButton(if (o.playing) "Pause" else "Play", app.observer::toggle, Modifier.weight(1f), height = 48.dp)
-        GhostButton("Other video", actions.pickVideo, Modifier.weight(1f))
+    o.raised.forEach { r -> RaisedRow(r, replay = !o.live) }
+    if (o.live) {
+        Text("Live sensing stays active across foreground tabs. Leaving the app pauses camera analysis.", color = Tokens.Faint, fontSize = 12.sp)
+        GhostButton("Stop drive", actions.stopDrive, Modifier.fillMaxWidth())
+    } else {
+        Text("Replay: ${o.source}", color = Tokens.Faint, fontSize = 12.sp)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            PrimaryButton(if (o.playing) "Pause" else "Play", app.observer::toggle, Modifier.weight(1f), height = 48.dp)
+            GhostButton("Other video", actions.pickVideo, Modifier.weight(1f))
+        }
+        GhostButton("Stop replay", { app.observer.simulate(false) }, Modifier.fillMaxWidth())
     }
-    GhostButton("Stop simulation", { app.observer.simulate(false) }, Modifier.fillMaxWidth())
 }
 
-@Composable private fun RaisedRow(r: Raised) {
+@Composable private fun RaisedRow(r: Raised, replay: Boolean) {
+    var expanded by remember(r.atMs) { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(r.call.kind.title() + if (r.call.kind.violation) " · logged" else "", fontWeight = FontWeight.Bold, fontSize = 15.sp)
-            Text("at ${"%.1f".format(r.call.atS)} s · ${r.call.reason}", color = Tokens.Faint, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text((if (replay) "clip ${"%.1f".format(r.call.atS)} s · " else "Local camera · ") + r.call.reason,
+                color = Tokens.Faint, fontSize = 13.sp, maxLines = if (expanded) Int.MAX_VALUE else 2, overflow = TextOverflow.Ellipsis)
         }
-        Text(if (r.sent) "Sent" else "Not sent", color = if (r.sent) Tokens.Green else Tokens.Red, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+        Text(if (r.sent) "Candidate queued" else "Local only", color = if (r.sent) Tokens.Green else Tokens.Red, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+    }
+    if (r.evidence.isNotEmpty()) {
+        TextButton(onClick = { expanded = !expanded }, contentPadding = PaddingValues(0.dp)) { Text(if (expanded) "Hide temporal evidence" else "Inspect temporal evidence", color = Tokens.Yellow, fontSize = 12.sp) }
+        if (expanded) r.evidence.forEach { Text(it, color = Tokens.Muted, fontSize = 12.sp, lineHeight = 17.sp) }
     }
     HorizontalDivider(color = Tokens.Line)
 }
@@ -303,11 +319,11 @@ enum class Tab(val title: String, val icon: TabIcon) {
     Surface(shape = RoundedCornerShape(20.dp), color = Tokens.Panel, border = BorderStroke(1.dp, if (line?.done == false) Tokens.Yellow else Tokens.Line), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("LIVE ANALYSIS", fontFamily = Michroma, fontSize = 11.sp, letterSpacing = 1.sp, color = Tokens.Yellow)
+                Text("LOCAL EXPLANATION", fontFamily = Michroma, fontSize = 11.sp, letterSpacing = 1.sp, color = Tokens.Yellow)
                 Text(if (!copilot.ready) "Co-pilot off" else if (copilot.tuned) "RESILANE Gemma 2B · on device" else "Gemma 2B · on device", fontSize = 12.sp, color = Tokens.Faint)
             }
             when {
-                !copilot.ready -> { Text(copilot.detail, color = Tokens.Muted, fontSize = 15.sp); ImportButton(copilot, actions) }
+                !copilot.ready -> { Text("Temporal rules generate event decisions on this phone. Optional Gemma explains the evidence; it does not gate urgent event sharing.", color = Tokens.Muted, fontSize = 15.sp); ImportButton(copilot, actions) }
                 line == null || line.text.isEmpty() -> Text("Reading the scene…", color = Tokens.Faint, fontSize = 16.sp)
                 else -> Text(line.text + if (line.done) "" else " ▍", fontSize = 18.sp, lineHeight = 25.sp, fontWeight = FontWeight.Medium)
             }
@@ -355,7 +371,7 @@ enum class Tab(val title: String, val icon: TabIcon) {
     Row(modifier.background(Tokens.Yellow, RoundedCornerShape(14.dp)).padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(recent.call.kind.title().uppercase(), color = Tokens.Ink, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp)
-        Text(if (recent.sent) "Sent to mesh" else "Not sent", color = Tokens.Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        Text(if (recent.sent) "Candidate queued" else "Local only", color = Tokens.Ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -365,7 +381,7 @@ enum class Tab(val title: String, val icon: TabIcon) {
         modifier = modifier.background(Tokens.Scrim, RoundedCornerShape(10.dp)).padding(horizontal = 10.dp, vertical = 6.dp))
 }
 
-@Composable private fun Metric(value: String, label: String, color: Color = Tokens.Paper) = Column {
+@Composable private fun Metric(value: String, label: String, color: Color = Tokens.Paper, modifier: Modifier = Modifier) = Column(modifier) {
     Text(value, style = Tabular, fontSize = 32.sp, fontWeight = FontWeight.SemiBold, color = color, lineHeight = 34.sp)
     Text(label, color = Tokens.Faint, fontSize = 13.sp)
 }
@@ -384,6 +400,7 @@ private fun counts(c: Map<ObjectClass, Int>): String {
     val me = state.me()
     TabColumn {
         when {
+            state.mode == Mode.ROAD -> Heading("Your local road mesh", "Every mounted phone can sense, relay and receive. Camera events travel automatically; neighbouring phones evaluate relevance locally. Inspect directional uncertainty in Lab → This phone.")
             !state.running -> Heading("Mesh is off", "Tap Start mesh. The first phone to start is A, the observer; every phone started after it relays in that order, and the newest one receives.")
             state.liveRole == Role.OBSERVER -> Heading("You are A, the observer", "You started the mesh first. What your camera finds, or a test warning from the Observe tab, goes to ${state.next()} and on down the chain.")
             state.liveRole == Role.RELAY -> Heading("$me relays to ${state.next()}", "Warnings from ${rankLetter(state.rank - 1)} arrive here. This phone works out what they mean from where it is, then passes them to ${state.next()}. Nothing to tap: it is automatic.")
@@ -401,16 +418,16 @@ private fun counts(c: Map<ObjectClass, Int>): String {
         Surface(shape = RoundedCornerShape(24.dp), color = Tokens.Panel, modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("MESH MAP · 3D", fontFamily = Michroma, fontSize = 11.sp, letterSpacing = 1.sp, color = Tokens.Yellow, modifier = Modifier.padding(start = 6.dp, top = 4.dp))
-                if (nodes.isEmpty()) Text("No phones heard yet.", color = Tokens.Faint, fontSize = 14.sp, modifier = Modifier.padding(6.dp))
-                else MeshMap3D(nodes, hazards, active)
-                Text("Drag to rotate, pinch to zoom. Blocks are phones (A leads); arcs are relay links, green while a warning crosses. Markers on the road are hazards this phone knows; ×2 means two phones reported it.",
+                if (nodes.isEmpty()) Text(if (state.chain.isEmpty()) "No phones heard yet." else "${state.chain.size} phones heard; waiting for usable positions.", color = Tokens.Faint, fontSize = 14.sp, modifier = Modifier.padding(6.dp))
+                else MeshMap3D(nodes, hazards, active, unlocatedCount = state.chain.size - nodes.size)
+                Text("Drag to rotate, pinch to zoom. Blocks show reported positions; arcs show inferred ordering, not confirmed radio links. Activity is local receipt or transmission. A missing position stays unlocated.",
                     color = Tokens.Faint, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(horizontal = 6.dp))
             }
         }
-        Text("Chain", style = MaterialTheme.typography.titleMedium)
+        Text(if (state.mode == Mode.STAGE) "Stage chain" else "Nearby participants", style = MaterialTheme.typography.titleMedium)
         if (state.chain.isEmpty()) Text("Waiting for presence beacons…", color = Tokens.Faint, fontSize = 14.sp)
         state.chain.forEach { m -> ChainRow(m, now) }
-        Text("Each phone sends a presence beacon every second. Every phone orders the chain the same way, so they agree without a coordinator; a phone silent for 4 s drops out and the chain closes up.",
+        Text("Each phone sends a presence beacon every second. This is one phone's local view; other phones may hear different peers. A phone silent for 4 s drops out. Road ordering uses this phone's heading, not a fleet-wide agreement.",
             color = Tokens.Faint, fontSize = 12.sp, lineHeight = 17.sp)
         if (state.events.isNotEmpty()) Text("Through this phone", style = MaterialTheme.typography.titleMedium)
         state.events.forEach { e -> EventStepper(e, me, state.next(), copilot.lines["event:${e.id}"], now) }
@@ -433,7 +450,7 @@ private fun counts(c: Map<ObjectClass, Int>): String {
 
 private fun detailText(d: HazardDetail?) = d?.let {
     listOfNotNull(it.rangeM?.let { r -> "camera saw it $r m ahead" }, it.vehicle.takeIf { v -> v != VehicleType.UNKNOWN }?.let { v -> "from a ${v.title}" },
-        it.confidence?.let { c -> "${(c * 100).toInt()}% confidence" }).joinToString(" · ")
+        it.confidence?.let { c -> "${(c * 100).toInt()}% detector score" }).joinToString(" · ")
 } ?: "no detail sent"
 
 @Composable private fun EventStepper(e: EventTrace, me: String, next: String, line: CopilotLine?, now: Long) {
@@ -444,15 +461,15 @@ private fun detailText(d: HazardDetail?) = d?.let {
                 Text("${(now - e.atMs) / 1000} s ago", style = Tabular, fontSize = 13.sp, color = Tokens.Faint)
             }
             if (e.originated) {
-                Step(true, "Detected by this phone's camera", detailText(e.detail))
-                Step(e.sentAtMs != null, if (e.sentAtMs != null) "Sent to $next" else "Sending to $next…", "Broadcast over Bluetooth. Delivery shows on the next phone.", last = true)
+                Step(true, "Generated by this phone", detailText(e.detail))
+                Step(e.sentAtMs != null, if (e.sentAtMs != null) "Local broadcast requested" else "Queued for local broadcast", "Delivery is confirmed only by reception on another phone.", last = true)
             } else {
                 val origin = e.id.origin.letter(); val via = e.via.letter()
                 Step(true, "Received from ${if (e.viaRank != NO_RANK) rankLetter(e.viaRank) else via}" + if (e.hops > 0) " · ${e.hops + 1} hops from the camera" else "", "The camera's inference: ${detailText(e.detail)}")
                 Step(true, "Inference on $me", e.inference?.let { "Hazard about ${it.hazardAheadM} m ahead of this phone" + (it.etaS?.let { s -> ", ${s.toInt()} s away" } ?: "") + ". ${it.action.replaceFirstChar { c -> c.uppercase() }}." } ?: "Position unknown",
                     copilot = line)
-                if (e.canRelay) Step(e.relayedAtMs != null, if (e.relayedAtMs != null) "Relayed to $next" else "Relaying to $next…", "Same event, same origin. The relay adds no trust of its own.", last = true)
-                else Step(null, "Not relayed", "Nobody is behind this phone in the chain, so this is the last hop.", last = true)
+                if (e.canRelay) Step(e.relayedAtMs != null, if (e.relayedAtMs != null) "Relay broadcast requested" else "Eligible for relay", "Same event, same origin. The relay adds no trust of its own.", last = true)
+                else Step(null, "Not relayed", "This event is not currently eligible for retransmission under the session rules.", last = true)
             }
         }
     }
@@ -477,7 +494,7 @@ private fun detailText(d: HazardDetail?) = d?.let {
 /* ---------- Received ---------- */
 
 @Composable internal fun ReceivedTab(app: RoadMeshApplication, state: SessionState, copilot: CopilotState, questions: List<Question>, now: Long, actions: Actions) {
-    val received = state.events.filter { !it.originated && it.kind?.use != HazardUse.REPORT }
+    val received = state.events.filter { !it.originated && it.announced && it.kind?.use != HazardUse.REPORT }
     val latest = received.firstOrNull()
     TabColumn {
         if (latest != null && now - latest.atMs < 20_000) {
@@ -487,7 +504,7 @@ private fun detailText(d: HazardDetail?) = d?.let {
                     Text("WARNING FROM $via · ${latest.hops + 1} HOP${if (latest.hops > 0) "S" else ""}", fontFamily = Michroma, fontSize = 11.sp, letterSpacing = 1.sp, color = Tokens.Yellow)
                     Text(latest.kind?.title() ?: "Warning", fontFamily = Saira, fontWeight = FontWeight.ExtraBold, fontSize = 42.sp, lineHeight = 44.sp, color = Tokens.Yellow)
                     latest.inference?.let { Text("About ${it.hazardAheadM} m ahead of you" + (it.etaS?.let { s -> " · ${s.toInt()} s away" } ?: ""), style = Tabular, fontSize = 18.sp, color = Tokens.Paper) }
-                    Text("Seen by the camera at the front (${detailText(latest.detail)})" + if (latest.hops > 0) ", relayed by $via." else ".", fontSize = 14.sp, color = Tokens.Muted, lineHeight = 19.sp)
+                    Text("Reported by a nearby phone (${detailText(latest.detail)})" + if (latest.hops > 0) ", relayed by $via." else ".", fontSize = 14.sp, color = Tokens.Muted, lineHeight = 19.sp)
                     latest.inference?.let { Text("Your move: ${it.action}.", fontSize = 16.sp, fontWeight = FontWeight.SemiBold) }
                     HorizontalDivider(color = Tokens.Line)
                     val line = copilot.lines["event:${latest.id}"]
@@ -499,7 +516,7 @@ private fun detailText(d: HazardDetail?) = d?.let {
                     }, fontSize = 17.sp, lineHeight = 24.sp)
                 }
             }
-        } else Heading("The road ahead", "Ask the phones in front of and behind you what they see. Their answers come back over Bluetooth with no internet and are combined into one picture, with a forecast made on this phone.")
+        } else Heading("Shared road awareness", "Camera events from nearby phones arrive and relay automatically. Every participating phone can sense, share and receive; no per-incident report is needed.")
         HowTo(state)
         RoadAhead(app, state, questions.firstOrNull(), copilot, now)
         AskPanel(questions, copilot, app::ask)
@@ -530,7 +547,7 @@ private fun detailText(d: HazardDetail?) = d?.let {
                 state.pictureAtMs?.let { Text("${(now - it) / 1000} s ago", style = Tabular, fontSize = 12.sp, color = Tokens.Faint) }
             }
             PrimaryButton(if (state.asking) "Asking the chain…" else "Ask the road ahead", { app.askRoad() }, Modifier.fillMaxWidth(), enabled = state.running && !state.asking)
-            if (picture == null) Text(if (state.running) "One request goes forward and back along the chain; every phone that hears it answers with what it holds." else "Start the mesh to ask the road.",
+            if (picture == null) Text(if (state.running) "Incoming events are automatic. Refresh requests a snapshot of evidence held by nearby phones." else "Start the mesh to ask the road.",
                 color = Tokens.Faint, fontSize = 14.sp, lineHeight = 20.sp)
             else {
                 Text("${picture.peers.size} phone${if (picture.peers.size == 1) "" else "s"} answered" +
@@ -572,6 +589,7 @@ private fun detailText(d: HazardDetail?) = d?.let {
 @Composable private fun HowTo(state: SessionState) {
     val me = state.me()
     val (title, body) = when {
+        state.mode == Mode.ROAD -> "Every phone participates" to if (state.chain.count { !it.self } == 0) "Local camera analysis can run without peers. Another participating phone must be heard before observations can propagate." else "Sensing and forwarding overlap. Every active dash camera can originate an event; received events retain their original source and age."
         !state.running -> "Start the mesh" to "Tap Start mesh at the top. The first phone to start becomes A, the observer. Start the other phones after it, one at a time: they become B, C, D… in that order, and the newest one receives."
         state.chain.size < 2 -> "Waiting for other phones" to "You are ${me}. Start the mesh on another phone nearby (Bluetooth on). It will appear here within two seconds and the chain forms by itself."
         state.liveRole == Role.OBSERVER -> "You are A · observer" to "Play the dashcam simulation below, or tap a test warning. It goes to B, which relays it down the chain; open Received on the last phone (${rankLetter(state.chain.size - 1)}) to see it arrive."
@@ -593,6 +611,22 @@ private fun detailText(d: HazardDetail?) = d?.let {
     }
 }
 
+@Composable private fun ManualNarrowingReport(app: RoadMeshApplication, state: SessionState) {
+    var result by remember { mutableStateOf("") }
+    Surface(shape = RoundedCornerShape(20.dp), color = Tokens.Panel, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("TEMPORARY ROAD CHANGE", fontFamily = Michroma, fontSize = 11.sp, color = Tokens.Yellow)
+            Text("Stopped bus, parked truck or roadworks reducing the usable road? Report the narrowing at your current position.",
+                color = Tokens.Muted, fontSize = 14.sp, lineHeight = 20.sp)
+            PrimaryButton(if (state.mode == Mode.STAGE) "Stage a road narrowing" else "Report road narrowed here",
+                { result = app.reportNarrowing() }, Modifier.fillMaxWidth(), enabled = state.ready)
+            Text(if (state.mode == Mode.STAGE) "DEMO position · test report over the phone mesh" else "For a stopped vehicle or passenger. This is a manual observation, not a camera detection.",
+                color = Tokens.Faint, fontSize = 12.sp)
+            if (result.isNotEmpty()) Text(result, color = Tokens.Muted, fontSize = 13.sp)
+        }
+    }
+}
+
 /** Test warnings for A, so the relay can be shown without the dashcam video. */
 @Composable private fun TestWarnings(app: RoadMeshApplication, state: SessionState) {
     var last by remember { mutableStateOf("") }
@@ -601,7 +635,7 @@ private fun detailText(d: HazardDetail?) = d?.let {
             Text("SEND A TEST WARNING", fontFamily = Michroma, fontSize = 11.sp, letterSpacing = 1.sp, color = Tokens.Yellow)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf(HazardKind.POTHOLE, HazardKind.ACCIDENT, HazardKind.BRAKING).forEach { k ->
-                    GhostButton(when (k) { HazardKind.ACCIDENT -> "Crash"; HazardKind.BRAKING -> "Braking"; else -> k.title() }, { last = if (app.sendTest(k)) "${k.title()} sent to ${state.next()}." else "Not sent: the mesh is not ready." }, Modifier.weight(1f))
+                    GhostButton(when (k) { HazardKind.ACCIDENT -> "Crash"; HazardKind.BRAKING -> "Braking"; else -> k.title() }, { last = if (app.sendTest(k)) "${k.title()} queued. Remote delivery is not confirmed." else "Not queued: the mesh is not ready." }, Modifier.weight(1f))
                 }
             }
             if (last.isNotEmpty()) Text(last, color = Tokens.Muted, fontSize = 13.sp)
@@ -615,14 +649,19 @@ private fun detailText(d: HazardDetail?) = d?.let {
     val coroutine = rememberCoroutineScope()
     var message by remember { mutableStateOf("") }
     TabColumn {
-        Heading("Road reports", "Potholes, accidents and traffic violations, each with a snapshot, time and place. Export them for the municipality or the traffic police.")
-        PrimaryButton("Report an accident here", { message = if (app.crash.report("accident reported by the driver")) "Accident sent to the mesh and logged." else "Not sent: the mesh is not running, or an accident was reported in the last minute." },
-            Modifier.fillMaxWidth())
-        GhostButton("Export for authorities", { coroutine.launch { message = runCatching { app.reports.export() }.getOrElse { "Export failed: ${it.message}" } } }, Modifier.fillMaxWidth())
+        Heading("Event evidence", "Review automatic camera candidates, local decisions and received mesh events. Recorded detections are prototype evidence, not confirmed violations.")
+        GhostButton("Export event evidence", { coroutine.launch { message = runCatching { app.reports.export() }.getOrElse { "Export failed: ${it.message}" } } }, Modifier.fillMaxWidth())
+        var diagnostics by rememberSaveable { mutableStateOf(false) }
+        TextButton(onClick = { diagnostics = !diagnostics }) { Text(if (diagnostics) "Hide manual diagnostics" else "Manual diagnostics", color = Tokens.Faint) }
+        if (diagnostics) {
+            val session by app.session.state.collectAsState()
+            Text("These controls inject manual observations for testing. The drive pipeline operates automatically.", color = Tokens.Faint, fontSize = 12.sp)
+            ManualNarrowingReport(app, session)
+        }
         if (message.isNotEmpty()) Text(message, color = Tokens.Muted, fontSize = 13.sp)
         val counts = reports.groupingBy { it.kind }.eachCount()
         if (counts.isNotEmpty()) Text(counts.entries.sortedByDescending { it.value }.joinToString(" · ") { "${it.value} ${it.key.title().lowercase()}" }, color = Tokens.Secondary, fontSize = 14.sp)
-        if (reports.isEmpty()) Text("No reports yet. Play the dashcam simulation on the Observe tab, or tap Report accident.", color = Tokens.Faint, fontSize = 14.sp, lineHeight = 20.sp)
+        if (reports.isEmpty()) Text("No events yet. Start drive for live camera analysis, or run a clearly labelled detection replay from Drive.", color = Tokens.Faint, fontSize = 14.sp, lineHeight = 20.sp)
         reports.take(60).forEach { r -> ReportRow(app, r) }
         if (reports.isNotEmpty()) GhostButton("Clear reports", { app.reports.clear() }, Modifier.fillMaxWidth())
     }
@@ -642,7 +681,7 @@ private fun detailText(d: HazardDetail?) = d?.let {
             Text(r.reason, fontSize = 13.sp, color = Tokens.Muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(r.utcMs)) +
                 (r.lat?.let { " · %.5f, %.5f".format(it, r.lon) } ?: "") + (if (r.synthetic) " (stage)" else "") +
-                (if (r.fromMesh) " · from mesh" else if (r.sentToMesh) " · shared" else ""), style = Tabular, fontSize = 11.sp, color = Tokens.Faint)
+                (if (r.fromMesh) " · from mesh" else if (r.sentToMesh) " · candidate queued" else ""), style = Tabular, fontSize = 11.sp, color = Tokens.Faint)
         }
     }
 }

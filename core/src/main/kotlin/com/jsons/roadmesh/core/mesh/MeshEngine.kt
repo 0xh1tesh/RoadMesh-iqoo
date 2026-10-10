@@ -5,7 +5,9 @@ import com.jsons.roadmesh.core.protocol.Flags as PacketFlags
 import kotlin.math.roundToInt
 
 sealed interface MeshEffect {
-    data class Originated(val frame: HazardEnvelope, val sourceEvent: String) : MeshEffect
+    data class Originated(val frame: HazardEnvelope, val sourceEvent: String,
+        /** Exact fix used to encode the origin, retaining local uncertainty lost by the short wire packet. */
+        val originFix: GeoFix? = null) : MeshEffect
     data class Transmit(val frame: HazardEnvelope, val relay: Boolean) : MeshEffect
     data class Received(val frame: HazardEnvelope) : MeshEffect
     data class Announce(val frame: HazardEnvelope, val kind: HazardKind, val distanceM: Int) : MeshEffect
@@ -48,6 +50,9 @@ class MeshEngine(
 
     fun publish(hazard: LocalHazard): List<MeshEffect> {
         val now = clock.monotonicMs(); expire(now)
+        val capturedAt = hazard.capturedAtMs ?: now
+        if (capturedAt < 0 || capturedAt > now || now - capturedAt >= profile.maxAgeMs) return drop("source_stale_or_future")
+        val capturedUtc = clock.utcMs() - (now - capturedAt)
         val fix = positions.current()?.takeIf { it.valid() } ?: return drop("position_unavailable")
         if (!permitted(hazard.provenance, fix.synthetic)) return drop("provenance_rejected")
         if (ownWindow == Long.MIN_VALUE || now - ownWindow >= 1_000) { ownWindow = now; ownCount = 0 }
@@ -57,14 +62,14 @@ class MeshEngine(
         val id = MessageId(node, session, ++sequence)
         val packet = Packet(PacketClass.ALERT, alias, sequence and 0xffff, minOf(profile.initialTtl, 3), 0,
             (if (fix.synthetic) PacketFlags.SYNTH_POS else 0) or (if (fix.heading == null) PacketFlags.NO_HEADING else 0),
-            Math.floorMod(clock.utcMs(), 3_600_000L).toInt() / 100,
+            Math.floorMod(capturedUtc, 3_600_000L).toInt() / 100,
             (fix.lat * 1e7).roundToInt(), (fix.lon * 1e7).roundToInt(),
             fix.speedMps?.times(100)?.roundToInt() ?: Packet.SPEED_UNKNOWN,
             fix.heading?.let { ((it % 360) * 256 / 360).roundToInt() and 255 } ?: 0,
             hazard.kind.cause, hazard.kind.subCause, hazard.detail?.p1 ?: 0, hazard.detail?.p2 ?: 0, alias and 255, (profile.maxAgeMs / 1_000).toInt().coerceAtLeast(1))
         val frame = HazardEnvelope(packet, id, node, hazard.provenance, profile.initialTtl, 0, rank())
         seen[id] = Seen(now + profile.dedupRetentionMs)
-        return listOf(MeshEffect.Originated(frame, hazard.sourceEvent), MeshEffect.Transmit(frame, false))
+        return listOf(MeshEffect.Originated(frame, hazard.sourceEvent, fix), MeshEffect.Transmit(frame, false))
     }
 
     fun receive(raw: ByteArray): List<MeshEffect> {

@@ -122,6 +122,12 @@ class SimEngine(
 
     override fun onSurfaceChanged(gl: GL10?, w: Int, h: Int) {
         width = w; height = h
+        // The display rotation can lag the surface (landscape-locked host app): an odd rotation means
+        // landscape. A mismatch made the camera image sideways, i.e. stretched. Trust the surface shape.
+        if ((w > h) != (rotation % 2 == 1)) {
+            org.resilane.sim.RLog.w("Track", "display rotation $rotation disagrees with ${w}x$h surface; correcting")
+            setDisplay(if (w > h) 1 else 0)
+        }
         GLES30.glViewport(0, 0, w, h)
         geometryDirty = true
     }

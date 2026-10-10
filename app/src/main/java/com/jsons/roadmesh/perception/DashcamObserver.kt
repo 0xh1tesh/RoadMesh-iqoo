@@ -2,6 +2,8 @@ package com.jsons.roadmesh.perception
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.SurfaceTexture
 import android.media.MediaPlayer
 import android.net.Uri
@@ -11,12 +13,8 @@ import android.view.TextureView
 import com.jsons.roadmesh.AppPreferences
 import com.jsons.roadmesh.copilot.Copilot
 import com.jsons.roadmesh.copilot.Priority
-import com.jsons.roadmesh.copilot.withArticle
 import com.jsons.roadmesh.core.insight.title
-import com.jsons.roadmesh.core.mesh.HazardDetail
-import com.jsons.roadmesh.core.mesh.HazardKind
-import com.jsons.roadmesh.core.mesh.LocalHazard
-import com.jsons.roadmesh.core.mesh.Provenance
+import com.jsons.roadmesh.core.mesh.*
 import com.jsons.roadmesh.core.perception.*
 import com.jsons.roadmesh.reports.ReportLog
 import com.jsons.roadmesh.service.MeshSession
@@ -27,19 +25,17 @@ import kotlinx.coroutines.flow.update
 import org.resilane.sim.vision.YoloDetector
 import java.util.concurrent.Executors
 
-/** One box on screen, already judged by the rules. */
+/** Short-lived local visual association, not a number plate or cross-phone vehicle identity. */
 data class Overlay(val subject: SeenObject, val inLane: Boolean, val distanceM: Double?, val lateralM: Double?, val hazard: Boolean,
                    val id: Int = 0, val vx: Float = 0f, val vy: Float = 0f)
-
-/** A hazard the rules raised and what the mesh did with it. */
-data class Raised(val call: HazardCall, val sent: Boolean, val atMs: Long)
-
+/** [sent] means the candidate entered the local mesh command queue; it may still be rejected before transmission. */
+data class Raised(val call: HazardCall, val sent: Boolean, val atMs: Long, val evidence: List<String> = emptyList(),
+                  val explanationTag: String? = null)
 data class ObserverState(
     val simulating: Boolean = false,
     val source: String = DashcamObserver.DEFAULT_LABEL,
     val playing: Boolean = false,
     val detector: String = "YOLO11n not loaded",
-    /** The RESILANE road model (potholes, helmets), when bundled. */
     val roadModel: String? = null,
     val inferMs: Long? = null,
     val fps: Double? = null,
@@ -51,195 +47,271 @@ data class ObserverState(
     val objects: List<SeenObject> = emptyList(),
     val frames: Long = 0,
     val error: String? = null,
+    val live: Boolean = false,
+    val cameraStatus: String = "Camera paused",
+    val analysisStatus: String = "Waiting for camera frames",
+    val capturedAtMs: Long? = null,
+    val trackedVehicles: Int = 0,
+    val automaticEvents: Long = 0,
 )
 
 /**
- * Observer pipeline: dashcam video → frames at about 10 Hz → YOLO11n (ONNX Runtime, XNNPACK) → [DashcamHazards] →
- * [MeshSession.publish] with REPLAY provenance, and a co-pilot line for each hazard. Video plays in a [TextureView] the
- * screen owns; frames are read back from it so what YOLO sees is exactly what is shown.
+ * Visible dashboard rear camera or explicit replay -> local YOLO -> temporal evidence -> automatic mesh event.
+ * Each phone can observe while relaying. Frames stay local. The optional LLM explains after alert/publication.
  */
-class DashcamObserver(private val context: Context, private val mesh: MeshSession, private val copilot: Copilot, private val prefs: AppPreferences,
-                      private val reports: ReportLog) {
+class DashcamObserver(private val context: Context, private val mesh: MeshSession, private val copilot: Copilot,
+                      private val prefs: AppPreferences, private val reports: ReportLog) {
     private val state = MutableStateFlow(ObserverState())
     val flow = state.asStateFlow()
-    private val yoloThread = Executors.newSingleThreadExecutor { Thread(it, "yolo").apply { priority = Thread.MAX_PRIORITY } }.asCoroutineDispatcher()
+    private val yoloThread = Executors.newSingleThreadExecutor { Thread(it, "roadmesh-perception") }.asCoroutineDispatcher()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var detector: YoloDetector? = null
     private var roadDetector: YoloDetector? = null
-    private var roadFailed = false
-    private var roadSeen: List<SeenObject> = emptyList()
-    private val watch = RoadWatch()
+    private var roadAttempted = false
     private var player: MediaPlayer? = null
     private var surface: Surface? = null
     private var view: TextureView? = null
+    private var texture: SurfaceTexture? = null
     private var loop: Job? = null
     private var source: Uri? = null
     private var asset: String = DEFAULT_ASSET
-    private val rules = DashcamHazards()
-    private val tracker = ObjectTracker()
-    private val frame = Bitmap.createBitmap(FRAME_W, FRAME_H, Bitmap.Config.ARGB_8888)
-    private var lastClipS = 0.0
+    private var replayLabel = DEFAULT_LABEL
+    private var foreground = false
+    private var generation = 0
     private var lastNarration = 0L
-
-    /** Called by the screen when its video surface is ready. Starts playback and analysis. */
-    fun attach(textureView: TextureView, texture: SurfaceTexture) {
-        view = textureView
-        surface?.release(); surface = Surface(texture)
-        if (player == null) open() else player?.setSurface(surface)
-        if (loop == null) loop = scope.launch { analyse() }
+    private val camera = LiveCameraSource(context) { message, active ->
+        state.update { it.copy(cameraStatus = message, playing = active) }
+        mesh.setObserving(active)
     }
 
-    /** The screen went away: stop reading frames and release the surface. The mesh keeps running. */
-    fun detach() {
-        loop?.cancel(); loop = null
-        player?.release(); player = null
-        surface?.release(); surface = null; view = null
-        state.update { it.copy(playing = false, overlays = emptyList()) }
+    /** Drive session setup only; subsequent sensing, inference and event exchange require no reporting taps. */
+    fun startLive() {
+        halt()
+        state.update { it.copy(live = true, simulating = false, source = "Rear camera · live", raised = emptyList(),
+            error = null, analysisStatus = "Waiting for camera frames", cameraStatus = "Waiting for visible dashboard") }
+        startAttached()
     }
-
-    /** The Observe tab's Simulate button: show the video pane, which then attaches its surface. */
+    fun stopLive() {
+        halt()
+        state.update { it.copy(live = false, cameraStatus = "Camera paused", analysisStatus = "Observation paused") }
+    }
+    /** Backgrounding closes the camera and invalidates every in-flight result. */
+    fun onForeground(active: Boolean) {
+        if (foreground == active) return
+        foreground = active
+        if (active) startAttached() else {
+            halt()
+            state.update { it.copy(cameraStatus = "Paused while app is in background", analysisStatus = "Observation paused") }
+        }
+    }
+    fun attach(textureView: TextureView, surfaceTexture: SurfaceTexture) {
+        halt(); view = textureView; texture = surfaceTexture; startAttached()
+    }
+    fun detach() { halt(); view = null; texture = null }
     fun simulate(on: Boolean) {
-        if (!on) detach()
-        mesh.setObserving(on)
-        state.update { it.copy(simulating = on) }
+        halt()
+        state.update { it.copy(simulating = on, live = false, source = replayLabel, error = null,
+            cameraStatus = if (on) "Replay clip · not a live camera" else "Camera paused", raised = emptyList()) }
+        if (on) startAttached()
     }
-
     fun toggle() {
         val p = player ?: return
         if (p.isPlaying) p.pause() else p.start()
-        state.update { it.copy(playing = p.isPlaying) }
+        state.update { it.copy(playing = p.isPlaying, analysisStatus = if (p.isPlaying) "Analysing replay frames" else "Replay paused") }
     }
-
-    /** Plays a video the user picked instead of the bundled clip. */
+    /** Bundled and picked pitch clips always remain REPLAY observations. */
     fun use(uri: Uri?, label: String, bundled: String = DEFAULT_ASSET) {
-        source = uri; asset = bundled
-        state.update { it.copy(source = label, raised = emptyList()) }
-        rules.reset(); tracker.reset(); watch.reset()
-        if (surface != null) { player?.release(); player = null; open() }
+        source = uri; asset = bundled; replayLabel = label
+        if (!state.value.live) state.update { it.copy(source = label, raised = emptyList()) }
+        if (state.value.simulating) { halt(); startAttached() }
     }
-
-    fun close() { detach(); scope.cancel(); yoloThread.close(); detector?.close(); detector = null; roadDetector?.close(); roadDetector = null }
-
-    private fun open() {
-        val s = surface ?: return
+    private fun halt() {
+        generation++; loop?.cancel(); loop = null; camera.close()
+        player?.release(); player = null; surface?.release(); surface = null
+        mesh.setObserving(false)
+        state.update { it.copy(playing = false, overlays = emptyList(), objects = emptyList(), counts = emptyMap(),
+            lead = null, trackedVehicles = 0, capturedAtMs = null) }
+    }
+    private fun startAttached() {
+        if (!foreground || loop != null) return
+        val v = view ?: return; val t = texture ?: return
+        val live = state.value.live
+        if (!live && !state.value.simulating) return
+        val token = generation
+        if (live) camera.start(v, t) else { v.setTransform(Matrix()); surface = Surface(t); openReplay(token) }
+        loop = scope.launch { analyse(token, live) }
+    }
+    private fun openReplay(token: Int) {
+        val output = surface ?: return
         if (asset == DriverMonitor.ASSET && source == null) return
         runCatching {
-            MediaPlayer().apply {
-                val uri = source
-                if (uri != null) setDataSource(context, uri)
-                else context.assets.openFd(asset).use { setDataSource(it.fileDescriptor, it.startOffset, it.length) }
-                setSurface(s); isLooping = true; setVolume(0f, 0f)
-                setOnPreparedListener { it.start(); state.update { st -> st.copy(playing = true, error = null) } }
-                prepareAsync()
+            MediaPlayer().also { p ->
+                player = p
+                source?.let { p.setDataSource(context, it) }
+                    ?: context.assets.openFd(asset).use { p.setDataSource(it.fileDescriptor, it.startOffset, it.length) }
+                p.setSurface(output); p.isLooping = true; p.setVolume(0f, 0f)
+                p.setOnPreparedListener {
+                    if (token == generation && foreground) { it.start(); mesh.setObserving(true); state.update { s -> s.copy(playing = true, error = null) } }
+                }
+                p.setOnErrorListener { _, _, _ ->
+                    if (token == generation) state.update { it.copy(playing = false, error = "Replay video could not be decoded") }
+                    true
+                }
+                p.prepareAsync()
             }
-        }.onSuccess { player = it }.onFailure { e -> state.update { it.copy(error = "Video failed: ${e.message}") } }
+        }.onFailure { failure -> state.update { it.copy(error = "Replay unavailable: ${failure.message}") } }
     }
-
-    private suspend fun analyse() {
-        val yolo = detector ?: withContext(yoloThread) {
-            // The NPU is used only after the isolated probe proved it on this phone and app version; until then the CPU.
-            val probe = NpuProbeService.result(context)
-            runCatching { YoloDetector(context, MODEL_ASSET, npu = probe?.startsWith("ok") == true) }
-        }.getOrElse { e ->
-            state.update { it.copy(detector = "YOLO11n missing", error = "Detector unavailable: ${e.message}. Run tools/fetch_dashcam.py") }
-            return
-        }.also { detector = it; state.update { s -> s.copy(detector = "YOLO11n · ${it.provider}") } }
-        val road = roadDetector ?: if (roadFailed) null else withContext(yoloThread) {
-            runCatching { YoloDetector(context, ROAD_ASSET, npu = NpuProbeService.result(context)?.startsWith("ok") == true) }.onFailure { roadFailed = true }.getOrNull()
-        }?.also { roadDetector = it; state.update { s -> s.copy(roadModel = "road model · ${it.provider}") } }
-
-        var window = SystemClock.elapsedRealtime(); var frames = 0
-        while (currentCoroutineContext().isActive) {
-            val started = SystemClock.elapsedRealtime()
-            val p = player; val v = view
-            if (p != null && v != null && v.isAvailable && runCatching { p.isPlaying }.getOrDefault(false)) {
-                val clipS = p.currentPosition / 1000.0
-                v.getBitmap(frame)
-                val t0 = SystemClock.elapsedRealtime()
-                val found = withContext(yoloThread) { yolo.detect(frame, 0.25f, KEEP) }
-                // The road model runs on every other frame; its boxes are reused for the frame between.
-                if (road != null && state.value.frames % 2 == 0L) roadSeen = withContext(yoloThread) { road.detect(frame, 0.3f, null) }.map {
-                    SeenObject(ObjectClass.road(it.cls), it.score, it.box.x1 / FRAME_W, it.box.y1 / FRAME_H, it.box.x2 / FRAME_W, it.box.y2 / FRAME_H)
-                }
-                val inferMs = SystemClock.elapsedRealtime() - t0
-                if (clipS + 0.5 < lastClipS) { rules.reset(); tracker.reset(); watch.reset() } // the clip looped
-                lastClipS = clipS
-                val objects = found.map {
-                    val o = SeenObject(ObjectClass.coco(it.cls), it.score, it.box.x1 / FRAME_W, it.box.y1 / FRAME_H, it.box.x2 / FRAME_W, it.box.y2 / FRAME_H)
-                    if (o.cls == ObjectClass.TRAFFIC_LIGHT) o.copy(light = colourOf(it.box.x1, it.box.y1, it.box.x2, it.box.y2)) else o
-                } + roadSeen
-                val call = rules.update(clipS, objects)
-                // Replay has no speed of its own; on the road the GNSS speed feeds the wrong-side rule.
-                val here = mesh.here()
-                watch.update(clipS, objects, here?.takeIf { !it.synthetic }?.speedMps).forEach { finding(it, objects) }
-                val tracks = tracker.update(clipS, objects.filter { it.score >= 0.35f })
-                if (call != null) raise(call, objects)
-                frames++
-                val now = SystemClock.elapsedRealtime()
-                val fps = if (now - window >= 1_000) frames * 1000.0 / (now - window) else null
-                if (fps != null) { window = now; frames = 0 }
-                state.update { s ->
-                    s.copy(inferMs = inferMs, fps = fps ?: s.fps, clipS = clipS, lead = rules.lead,
-                        counts = objects.filter { it.score >= 0.35f && it.cls in SCENE }.groupingBy { it.cls }.eachCount(), objects = objects, frames = s.frames + 1,
-                        overlays = tracks.map { tr ->
-                            val o = tr.subject
-                            Overlay(o, rules.inLane(o), rules.distanceM(o), rules.lateralM(o),
-                                call?.subject == o || s.raised.firstOrNull()?.let { r -> now - r.atMs < 1_500 && r.call.subject.iou(o) > 0.5f } == true,
-                                tr.id, tr.vx, tr.vy)
-                        })
-                }
-                if (call == null && now - lastNarration > NARRATE_MS && copilot.idle) narrate(objects, clipS)
-            }
-            delay((PERIOD_MS - (SystemClock.elapsedRealtime() - started)).coerceAtLeast(5))
+    fun close() {
+        halt(); scope.cancel()
+        // Cleanup queues behind a cancelled-but-still-running native ONNX call.
+        CoroutineScope(yoloThread).launch {
+            detector?.close(); detector = null; roadDetector?.close(); roadDetector = null; yoloThread.close()
         }
     }
-
-    /** Reads a traffic light's lit lamp from the current frame. */
-    private fun colourOf(x1: Float, y1: Float, x2: Float, y2: Float): LightColour? {
-        val l = x1.toInt().coerceIn(0, FRAME_W - 1); val t = y1.toInt().coerceIn(0, FRAME_H - 1)
-        val w = (x2.toInt() - l).coerceIn(1, FRAME_W - l); val h = (y2.toInt() - t).coerceIn(1, FRAME_H - t)
-        val px = IntArray(w * h); frame.getPixels(px, 0, w, l, t, w, h)
-        return lightColour(px)
+    private suspend fun loadDetectors(): YoloDetector? {
+        withContext(yoloThread + NonCancellable) {
+            if (detector == null) runCatching {
+                // NPU only after the isolated probe passed; detector otherwise uses XNNPACK/CPU.
+                YoloDetector(context, MODEL_ASSET, npu = NpuProbeService.result(context)?.startsWith("ok") == true)
+            }.onSuccess { detector = it }.onFailure { e ->
+                state.update { it.copy(detector = "YOLO11n unavailable", error = "Local detector could not load: ${e.message}",
+                    analysisStatus = "Detection unavailable; no automatic warnings") }
+            }
+            if (detector != null && !roadAttempted) {
+                roadAttempted = true
+                roadDetector = runCatching { YoloDetector(context, ROAD_ASSET, npu = false) }.getOrNull()
+            }
+        }
+        currentCoroutineContext().ensureActive()
+        detector?.let { d -> state.update { it.copy(detector = "YOLO11n · ${d.provider}",
+            roadModel = roadDetector?.let { r -> "road model · ${r.provider}" } ?: "Road model unavailable") } }
+        return detector
     }
-
-    /** A pothole, accident or violation: sent to the mesh, logged with a snapshot, and phrased by the co-pilot. */
-    private fun finding(f: RoadFinding, objects: List<SeenObject>) {
-        val detail = HazardDetail(f.distanceM?.toInt()?.coerceAtLeast(1), prefs.vehicle, f.confidence)
-        val sent = mesh.publish(LocalHazard(f.kind, Provenance.REPLAY, "dashcam ${"%.1f".format(f.atS)}s: ${f.reason}", detail))
+    private suspend fun analyse(token: Int, live: Boolean) {
+        val yolo = loadDetectors() ?: return
+        val analyzer = AutomatedTrafficAnalyzer()
+        val geometry = DashcamHazards()
+        // Session-local bitmap prevents native inference reading pixels from a newly attached source.
+        val frame = Bitmap.createBitmap(FRAME_W, FRAME_H, Bitmap.Config.ARGB_8888)
+        var lastClipS = -1.0
+        var lastReplayBufferNs = 0L
+        var lastCapturedFix: GeoFix? = null
+        var geometryEpoch = camera.geometryEpoch
+        var lastFrameMs = SystemClock.elapsedRealtime()
+        var window = lastFrameMs; var frames = 0
+        try {
+            while (currentCoroutineContext().isActive && token == generation) {
+                val started = SystemClock.elapsedRealtime()
+                val v = view
+                var captureMs: Long? = null; var tS = 0.0
+                if (live) {
+                    camera.readLatest(frame)?.let { stamp -> captureMs = stamp.capturedAtMs; tS = stamp.capturedAtMs / 1000.0 }
+                } else {
+                    val p = player
+                    if (v != null && v.isAvailable && p != null && runCatching { p.isPlaying }.getOrDefault(false)) {
+                        tS = p.currentPosition / 1000.0
+                        frame.eraseColor(Color.BLACK)
+                        if (tS != lastClipS && runCatching { v.getBitmap(frame) }.getOrNull() != null) {
+                            val bufferNs = runCatching { texture?.timestamp ?: 0L }.getOrDefault(0L)
+                            if (bufferNs > 0 && bufferNs != lastReplayBufferNs) {
+                                if (tS < lastClipS || tS - lastClipS > 1.0) analyzer.reset()
+                                lastReplayBufferNs = bufferNs; lastClipS = tS; captureMs = started
+                            }
+                        }
+                    }
+                }
+                val captured = captureMs
+                if (captured != null) {
+                    lastFrameMs = started
+                    if (live && camera.geometryEpoch != geometryEpoch) {
+                        analyzer.reset()
+                        geometryEpoch = camera.geometryEpoch
+                    }
+                    // Snapshot sensors at capture, before ONNX can take hundreds of milliseconds. A later GNSS
+                    // update must not be attributed to an older camera frame or discard all speed evidence.
+                    if (live) mesh.here()?.takeIf { !it.synthetic && it.valid() &&
+                        it.sampledAtMs?.let { sample -> sample <= captured } == true }?.let { lastCapturedFix = it }
+                    val capturedFix = lastCapturedFix.takeIf { live }
+                    val stableAtCapture = !live || camera.cameraStable
+                    val objects = withContext(yoloThread) {
+                        val general = yolo.detect(frame, 0.25f, KEEP).map {
+                            SeenObject(ObjectClass.coco(it.cls), it.score, it.box.x1 / FRAME_W, it.box.y1 / FRAME_H, it.box.x2 / FRAME_W, it.box.y2 / FRAME_H)
+                        }
+                        // No cached road boxes: a repeated inference must not earn independent temporal support.
+                        general + roadDetector?.detect(frame, 0.35f, null).orEmpty().map {
+                            SeenObject(ObjectClass.road(it.cls), it.score, it.box.x1 / FRAME_W, it.box.y1 / FRAME_H, it.box.x2 / FRAME_W, it.box.y2 / FRAME_H)
+                        }
+                    }
+                    currentCoroutineContext().ensureActive()
+                    if (token != generation) break
+                    val now = SystemClock.elapsedRealtime(); val inferMs = now - started
+                    if (now - captured > MAX_FRAME_AGE_MS) {
+                        analyzer.reset()
+                        state.update { it.copy(inferMs = inferMs, analysisStatus = "Unknown: inference frame too old", overlays = emptyList(), objects = emptyList()) }
+                        continue
+                    }
+                    val stable = stableAtCapture && (!live || camera.cameraStable)
+                    val ego = capturedFix?.let { fix ->
+                        val sample = fix.sampledAtMs; val speed = fix.speedMps
+                        if (sample == null || speed == null) null else EgoMotion(sample / 1000.0, speed,
+                            fix.speedAccuracyMps, fix.heading, fix.headingAccuracyDeg, stable)
+                    } ?: if (live && !stable) EgoMotion(tS, Double.NaN, cameraStable = false) else null
+                    val result = analyzer.update(tS, objects, ego)
+                    result.events.forEach { automatic(it, captured, live, objects, frame) }
+                    frames++
+                    val fps = if (now - window >= 1000) frames * 1000.0 / (now - window) else null
+                    if (fps != null) { window = now; frames = 0 }
+                    state.update { s -> s.copy(inferMs = inferMs, fps = fps ?: s.fps, clipS = if (live) s.clipS else tS,
+                        capturedAtMs = captured, analysisStatus = result.status, trackedVehicles = result.monitoredVehicles,
+                        counts = objects.filter { it.score >= 0.35f && it.cls in SCENE }.groupingBy { it.cls }.eachCount(),
+                        objects = objects, frames = s.frames + 1, automaticEvents = s.automaticEvents + result.events.size,
+                        overlays = result.tracks.map { tr -> Overlay(tr.subject, geometry.inLane(tr.subject), geometry.distanceM(tr.subject),
+                            geometry.lateralM(tr.subject), result.events.any { tr.id in it.trackIds }, tr.id, tr.vx, tr.vy) }) }
+                    if (result.events.isEmpty() && now - lastNarration > NARRATE_MS && copilot.idle) narrate(objects, live, tS)
+                } else if (live && started - lastFrameMs > MAX_FRAME_AGE_MS) {
+                    analyzer.reset()
+                    state.update { it.copy(analysisStatus = "Unknown: waiting for fresh camera frames", overlays = emptyList(), objects = emptyList()) }
+                }
+                delay((PERIOD_MS - (SystemClock.elapsedRealtime() - started)).coerceAtLeast(10))
+            }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (e: Exception) {
+            if (token == generation) state.update { it.copy(error = "Analysis paused: ${e.message}", analysisStatus = "Detection unavailable", overlays = emptyList()) }
+        } finally { frame.recycle() }
+    }
+    private fun automatic(event: AutomaticTrafficEvent, capturedMs: Long, live: Boolean, objects: List<SeenObject>, frame: Bitmap) {
+        val provenance = if (live) Provenance.LIVE else Provenance.REPLAY
+        val modeMatches = if (live) mesh.state.value.mode == Mode.ROAD else mesh.state.value.mode == Mode.STAGE
+        val detail = HazardDetail(event.estimatedRangeM?.toInt()?.coerceAtLeast(1), prefs.vehicle, event.detectorConfidence)
+        val reason = event.reason + ". Evidence: " + event.evidence.joinToString("; ")
+        if (live) mesh.localCaution(when (event.kind) {
+            HazardKind.BRAKING -> "Sharp slowing detected at this phone. Stay attentive."
+            HazardKind.SLOWDOWN -> "Possible traffic slowdown. Stay attentive."
+            HazardKind.POTHOLE -> "Possible pothole ahead."
+            else -> event.kind.speech
+        })
+        val sent = modeMatches && mesh.publish(LocalHazard(event.kind, provenance, reason, detail, capturedAtMs = capturedMs))
         val here = mesh.here()
-        reports.add(f.kind, f.reason, f.confidence, here?.lat, here?.lon, here?.synthetic ?: true, frame, sent, state.value.source)
-        val call = HazardCall(f.kind, f.atS, f.reason, f.subject, f.distanceM ?: 0.0)
-        state.update { it.copy(raised = (listOf(Raised(call, sent, SystemClock.elapsedRealtime())) + it.raised).take(6)) }
+        reports.add(event.kind, reason, event.detectorConfidence, here?.lat, here?.lon, !live || here?.synthetic != false,
+            frame, sent, if (live) "Automatic rear camera" else "Replay: $replayLabel")
+        val subject = event.subject ?: objects.firstOrNull() ?: SeenObject(ObjectClass.OTHER, 0f, 0f, 0f, 0f, 0f)
+        val call = HazardCall(event.kind, event.atS, event.reason, subject, event.estimatedRangeM ?: 0.0)
+        val tag = "automatic:$provenance:$capturedMs:${event.kind}"
+        state.update { it.copy(raised = (listOf(Raised(call, sent, SystemClock.elapsedRealtime(), event.evidence, tag)) + it.raised).take(6)) }
         lastNarration = SystemClock.elapsedRealtime()
-        val veh = prefs.vehicle.title
-        if (f.kind.violation) copilot.ask("hazard:${f.atS}", "This $veh's front camera saw: ${f.reason}. Violation: ${f.kind.title()}. " +
-            "It was logged with a snapshot and location for the traffic police" + (if (sent) " and shared over the mesh." else "."), Priority.EVENT, Copilot.TASK_REPORT)
-        else raiseCopilot(call, objects, sent)
+        copilot.ask(tag,
+            "${if (live) "Live mounted rear camera" else "Recorded clip replay, not a live road event"}: $reason. " +
+                "Detector score ${event.detectorConfidence}; this is not an incident probability. " +
+                (if (sent) "An event candidate was queued for mesh processing; remote delivery is unknown."
+                else "This caution is local; no network warning was queued."), Priority.EVENT, fallback = event.reason)
     }
-
-    private fun raise(call: HazardCall, objects: List<SeenObject>) {
-        val detail = HazardDetail(call.distanceM.toInt(), prefs.vehicle, call.subject.score.toDouble())
-        val sent = mesh.publish(LocalHazard(call.kind, Provenance.REPLAY, "dashcam ${"%.1f".format(call.atS)}s: ${call.reason}", detail))
-        state.update { it.copy(raised = (listOf(Raised(call, sent, SystemClock.elapsedRealtime())) + it.raised).take(6)) }
-        raiseCopilot(call, objects, sent)
-    }
-
-    private fun raiseCopilot(call: HazardCall, objects: List<SeenObject>, sent: Boolean) {
+    private fun narrate(objects: List<SeenObject>, live: Boolean, tS: Double) {
         lastNarration = SystemClock.elapsedRealtime()
-        copilot.ask("hazard:${call.atS}", "This ${prefs.vehicle.title}'s front camera saw: ${call.reason}. Hazard: ${call.kind.title()}. Also in view: ${scene(objects)}. " +
-            if (sent) "A warning was broadcast to the vehicles behind over the Bluetooth mesh." else "The mesh is not running, so nobody behind was warned.", Priority.EVENT)
+        val scene = objects.filter { it.score >= 0.35f && it.cls in SCENE }.groupingBy { it.cls }.eachCount()
+            .entries.joinToString { "${it.value} ${it.key.name.lowercase()}" }.ifEmpty { "no current detections; visibility is unknown" }
+        copilot.ask("scene:$live:$tS", "${if (live) "Live mounted camera" else "Recorded clip"}: $scene. " +
+            "These are local object detections, not proof the road is clear. Explain briefly without inventing a hazard or manoeuvre.", Priority.SCENE, Copilot.TASK_SCENE)
     }
-
-    private fun narrate(objects: List<SeenObject>, clipS: Double) {
-        lastNarration = SystemClock.elapsedRealtime()
-        val lead = rules.lead?.let { "The nearest vehicle in our lane is ${withArticle(it.subject.cls.name.lowercase())} about ${it.distanceM.toInt()} m ahead. " } ?: "No vehicle directly ahead in our lane. "
-        copilot.ask("scene:$clipS", "Front camera of ${withArticle(prefs.vehicle.title)} on an Indian city road. In view: ${scene(objects)}. $lead No hazard right now.", Priority.SCENE,
-            Copilot.TASK_SCENE)
-    }
-
-    private fun scene(objects: List<SeenObject>) = objects.filter { it.score >= 0.35f && it.cls in SCENE }
-        .groupingBy { it.cls }.eachCount().entries.joinToString { (c, n) -> val name = c.name.lowercase(); "$n $name${if (n > 1) (if (name.endsWith("s")) "es" else "s") else ""}" }.ifEmpty { "an empty road" }
-
     companion object {
         const val DEFAULT_ASSET = "dashcam/bangalore_cv_raman_road.mp4"
         /**
@@ -253,13 +325,13 @@ class DashcamObserver(private val context: Context, private val mesh: MeshSessio
         )
         const val DEFAULT_LABEL = "C V Raman Road, Bengaluru · dashcam · CC0"
         const val MODEL_ASSET = "models/yolo11n_384x640.onnx"
-        /** Trained on Kaggle by tools/kaggle/road_yolo/train.py: 0 pothole, 1 helmet, 2 no_helmet. Optional. */
         const val ROAD_ASSET = "models/road_yolo11n_384x640.onnx"
         private val SCENE = setOf(ObjectClass.PERSON, ObjectClass.BICYCLE, ObjectClass.CAR, ObjectClass.MOTORCYCLE, ObjectClass.BUS, ObjectClass.TRUCK)
         const val FRAME_W = 640
         const val FRAME_H = 360
-        const val PERIOD_MS = 100L
-        const val NARRATE_MS = 6_000L
+        const val PERIOD_MS = 200L
+        const val NARRATE_MS = 8_000L
+        const val MAX_FRAME_AGE_MS = 1_500L
         private val KEEP = setOf(0, 1, 2, 3, 5, 7, 9)
         fun title(kind: HazardKind) = kind.title()
     }

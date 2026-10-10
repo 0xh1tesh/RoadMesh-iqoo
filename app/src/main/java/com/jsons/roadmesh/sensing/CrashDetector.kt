@@ -13,16 +13,15 @@ import com.jsons.roadmesh.service.MeshSession
 import kotlin.math.sqrt
 
 /**
- * Accident reporting from this phone: an impact the accelerometer feels (over [thresholdG] for [samples] readings in a
- * row, the usual crash-detection floor for phones in a mount), or the driver tapping "Report accident" when they see one.
- * Either way the accident goes to the mesh so cars behind slow down early, and into the report log.
- * A dropped phone also exceeds the threshold; the mesh carries it as an unconfirmed caution, never as a verified crash.
+ * Impact candidate from this phone, plus a manual diagnostic report action. A phone drop or road jolt can exceed
+ * [thresholdG], so acceleration alone is logged locally and must not automatically manufacture a network accident.
  */
 class CrashDetector(private val context: Context, private val mesh: MeshSession, private val reports: ReportLog, private val prefs: AppPreferences,
                     private val thresholdG: Double = 4.0, private val samples: Int = 3) : SensorEventListener {
     private val sensors = context.getSystemService(SensorManager::class.java)
     private var over = 0
     private var lastMs = -60_000L
+    private var lastImpactMs = -60_000L
     var listening = false; private set
 
     fun start() {
@@ -35,7 +34,14 @@ class CrashDetector(private val context: Context, private val mesh: MeshSession,
     override fun onSensorChanged(e: SensorEvent) {
         val g = sqrt(e.values[0] * e.values[0] + e.values[1] * e.values[1] + e.values[2] * e.values[2]) / SensorManager.GRAVITY_EARTH
         over = if (g > thresholdG) over + 1 else 0
-        if (over >= samples) { over = 0; report("impact of ${"%.1f".format(g)} g felt by this phone", g.toDouble() / 10) }
+        if (over >= samples) {
+            over = 0
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastImpactMs >= 60_000) {
+                lastImpactMs = now
+                mesh.record("impact_candidate", "Phone acceleration ${"%.1f".format(g)} g; cause unknown, no accident broadcast")
+            }
+        }
     }
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
 

@@ -47,10 +47,12 @@ class RoadQueries(
             is ControlFrame.Reply -> {
                 if (frame.responder == node || !mark(frame.query to frame.responder, nowMs)) return emptyList()
                 open[frame.query]?.let { q ->
-                    if (!q.done) open[frame.query] = q.copy(replies = q.replies + frame)
+                    if (!q.done && nowMs - q.sentMs < windowMs && q.replies.size < MAX_REPLIES)
+                        open[frame.query] = q.copy(replies = q.replies + frame.copy(receivedAtMs = nowMs))
                     return emptyList()
                 }
-                listOfNotNull(frame.relayedBy(node))
+                // Legacy v1 can carry eight small records; a v2 relay caps them to its evidence byte budget.
+                listOfNotNull(frame.copy(records = frame.records.take(ControlCodec.MAX_RECORDS)).relayedBy(node))
             }
             is ControlFrame.Presence -> emptyList()
         }
@@ -69,4 +71,6 @@ class RoadQueries(
         return true
     }
     private fun expire(nowMs: Long) { seen.entries.removeAll { nowMs - it.value > 30_000 } }
+
+    companion object { const val MAX_REPLIES = 64 }
 }

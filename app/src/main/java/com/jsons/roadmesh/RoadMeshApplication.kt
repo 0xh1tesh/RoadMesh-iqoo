@@ -37,15 +37,18 @@ class RoadMeshApplication : Application() {
         super.onCreate()
         if (Application.getProcessName() != packageName) return
         copilot.load()
-        // Impact detection runs only while the mesh is up, so a crash is shared the moment it is felt.
-        scope.launch { session.state.map { it.running }.distinctUntilChanged().collect { if (it) crash.start() else crash.stop() } }
+        // Phone motion is relevant only during a visible mounted live session, never a pitch clip.
+        scope.launch { combine(session.state, observer.flow) { s, o ->
+            s.running && s.mode == com.jsons.roadmesh.core.mesh.Mode.ROAD && o.live && o.playing
+        }.distinctUntilChanged().collect { if (it) crash.start() else crash.stop() } }
         // Every node that receives a warning makes its own inference and has the co-pilot phrase it after the caution.
         scope.launch {
-            session.state.map { s -> s.events.filter { !it.originated } }.collect { events ->
+            session.state.map { s -> s.events.filter { !it.originated } }.distinctUntilChanged().collect { events ->
                 for (e in events) {
                     val tag = "event:${e.id}"
                     if (tag in explained) continue
                     explained += tag
+                    while (explained.size > 256) explained.remove(explained.first())
                     val kind = e.kind ?: continue
                     if (kind.use == HazardUse.REPORT) {
                         reports.add(kind, "reported over the mesh by phone ${e.id.origin.letter()}", e.detail?.confidence, null, null, true, null,
@@ -53,14 +56,39 @@ class RoadMeshApplication : Application() {
                         continue
                     }
                     val inference = e.inference ?: continue
-                    val facts = inference.facts(e.id.origin.letter().first(), e.via.letter().first()) + " This phone is in ${withArticle(preferences.vehicle.title)}."
-                    val plain = "${kind.title()} about ${inference.hazardAheadM} m ahead: ${inference.action}."
-                    copilot.ask(tag, facts, Priority.EVENT, fallback = plain) { line -> if (session.state.value.running) session.say(line) }
+                    val mode = session.state.value.mode
+                    val facts = inference.facts(e.id.origin.letter().first(), e.via.letter().first()) +
+                        " Distances are rough estimates, not a calibrated measurement. Mode: $mode. This phone is in ${withArticle(preferences.vehicle.title)}."
+                    val plain = "${kind.title()}: ${inference.action}. Distance is approximate."
+                    copilot.ask(tag, facts, Priority.EVENT, fallback = plain) { line ->
+                        val current = session.state.value
+                        if (current.running && current.mode == mode && current.alert?.frame?.id == e.id &&
+                            SystemClock.elapsedRealtime() - e.atMs in 0..5_000) session.say(line)
+                    }
                 }
             }
         }
     }
-    private val explained = HashSet<String>()
+    private val explained = LinkedHashSet<String>()
+    private var lastNarrowingReportMs: Long? = null
+
+    /** Manual observation at the phone's current position. The return text describes queueing, not delivery. */
+    fun reportNarrowing(): String {
+        if (!session.state.value.ready) return "Start a ready mesh session before reporting."
+        val at = session.here() ?: return "Waiting for a fresh position. The report was not queued."
+        val now = SystemClock.elapsedRealtime()
+        if (lastNarrowingReportMs?.let { now - it in 0 until 15_000 } == true) return "Report already queued. Wait 15 seconds before reporting again."
+        val replay = session.state.value.mode == com.jsons.roadmesh.core.mesh.Mode.STAGE
+        val queued = session.publish(com.jsons.roadmesh.core.mesh.LocalHazard(
+            com.jsons.roadmesh.core.mesh.HazardKind.ROAD_NARROWED,
+            if (replay) com.jsons.roadmesh.core.mesh.Provenance.REPLAY else com.jsons.roadmesh.core.mesh.Provenance.LIVE,
+            "manual road narrowing at this phone",
+            com.jsons.roadmesh.core.mesh.HazardDetail(0, preferences.vehicle, null)), at)
+        if (!queued) return "The session could not queue the report."
+        lastNarrowingReportMs = now
+        return if (replay) "Stage report queued at a synthetic position. Remote delivery is not confirmed."
+            else "Road narrowing queued at your position. Remote delivery is not confirmed."
+    }
 
     /**
      * "What is the road like?": asks the phones ahead and behind over the mesh, combines their answers with this phone's
@@ -80,14 +108,21 @@ class RoadMeshApplication : Application() {
 
     private fun answer(tag: String, question: String, picture: RoadPicture) {
         val camera = observer.flow.value.let { o ->
-            if (!(o.simulating && o.playing)) "" else " Front camera sees: " + (o.counts.entries.joinToString { (c, n) -> "$n ${c.name.lowercase()}" }.ifEmpty { "an empty road" }) + "."
+            val fresh = o.capturedAtMs?.let { SystemClock.elapsedRealtime() - it in 0..1_500 } == true
+            if (!o.playing || !fresh) " Camera evidence unavailable or stale." else
+                " ${if (o.live) "Live camera" else "Replay clip"} detections: " +
+                    o.counts.entries.joinToString { (c, n) -> "$n ${c.name.lowercase()}" }.ifEmpty { "no current detections; visibility is unknown" } +
+                    ". ${if (o.live) "Object detections do not prove the road is clear." else "These are recorded observations."}"
         }
         val facts = "This phone is in ${withArticle(preferences.vehicle.title)}. " + picture.facts() + camera
         val plain = picture.forecast.advice.take(2).joinToString(" ")
         asked.update { qs -> qs.map { if (it.tag == tag) it.copy(answer = plain, facts = facts, picture = picture) else it } }
         val generic = question.startsWith("What's the road like")
+        val mode = session.state.value.mode
         val queued = copilot.ask(tag, if (generic) picture.facts() else facts, Priority.QUESTION,
-            if (generic) Copilot.TASK_ROAD else Copilot.taskQuestion(question), fallback = plain) { line -> session.say(line) }
+            if (generic) Copilot.TASK_ROAD else Copilot.taskQuestion(question), fallback = plain) { line ->
+                if (session.state.value.running && session.state.value.mode == mode) session.say(line)
+            }
         if (!queued) session.say(plain)
     }
 

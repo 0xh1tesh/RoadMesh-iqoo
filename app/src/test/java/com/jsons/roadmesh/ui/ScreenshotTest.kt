@@ -13,8 +13,11 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import com.github.takahirom.roborazzi.captureRoboImage
@@ -33,6 +36,7 @@ import com.jsons.roadmesh.perception.Raised
 import com.jsons.roadmesh.service.EventTrace
 import com.jsons.roadmesh.service.SessionState
 import com.jsons.roadmesh.core.road.*
+import com.jsons.roadmesh.core.swarm.SwarmScenarioConfig
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -93,12 +97,56 @@ class ScreenshotTest {
         shot("4-observe-idle")
     }
 
+    @Test fun driveStartsWithOneActionAndReplayStaysAvailable() {
+        var starts = 0
+        var replayStarts = 0
+        val driveActions = Actions({}, {}, {}, {}, {}, {}, {}, {}, {}, startDrive = { starts++ }, startReplay = { replayStarts++ })
+        // Scroll changes node coordinates. Let layout and click recompositions settle during interaction.
+        compose.mainClock.autoAdvance = true
+        compose.setContent { RoadMeshTheme { Surface(color = Tokens.Ink) {
+            MainTabs(app, SessionState(Role.RELAY, Mode.ROAD), CopilotState(), ObserverState(), emptyList(), driveActions)
+        } } }
+        compose.waitForIdle()
+        compose.onNodeWithText("Start drive").performScrollTo().performClick()
+        org.junit.Assert.assertEquals(1, starts)
+        compose.onNodeWithText("Open replay lab").performScrollTo().performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Hide replay lab").assertExists()
+        com.jsons.roadmesh.perception.DashcamObserver.CLIPS.forEach { (_, label) -> compose.onNodeWithText(label).assertExists() }
+        compose.onNodeWithText("Start replay demo").performScrollTo().performClick()
+        org.junit.Assert.assertEquals(1, replayStarts)
+        compose.mainClock.autoAdvance = false
+        shot("17-drive-replay-choice")
+    }
+
+    @Test fun automaticPipelineShowsLocalOnlyWithoutPosition() {
+        val observer = observed().copy(simulating = false, live = true, frames = 84, capturedAtMs = now,
+            cameraStatus = "Rear camera streaming", analysisStatus = "Rapid closing candidate · sustained track growth")
+        compose.mainClock.autoAdvance = false
+        compose.setContent { RoadMeshTheme { Surface(color = Tokens.Ink) {
+            Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                DrivePipeline(SessionState(Role.RELAY, Mode.ROAD, running = true, ready = true), observer)
+            }
+        } } }
+        compose.onNodeWithText("Local sensing · awaiting real position for sharing").assertExists()
+        shot("18-live-pipeline-position-unknown")
+    }
+
+    @Test fun automatedEventLabUsesComputedFixtures() {
+        compose.setContent { RoadMeshTheme { Surface(color = Tokens.Ink) {
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) { AutomationLab() }
+        } } }
+        compose.onNodeWithText("AUTOMATIC EVENT LAB").assertExists()
+        compose.onNodeWithText("Fixture expectation matched").assertExists()
+        shot("19-automatic-event-lab")
+    }
+
     @Test fun observeSimulating() {
         val frame = BitmapFactory.decodeStream(javaClass.getResourceAsStream("/cv_raman_8s.jpg")).asImageBitmap()
         val o = observed()
         val copilot = ready.copy(lines = mapOf("hazard:8.2" to CopilotLine("hazard:8.2", "A car has cut in about 3 metres ahead; ease off and let the gap open before you", false),
-            "q:1" to CopilotLine("q:1", "Yes, a pothole about 240 m ahead, reported by 2 phones; slow to about 20 km/h before it.", true, 2600)))
-        val q = listOf(Question("q:1", "Any potholes ahead?", "Pothole 240 m ahead (about 20 s away): slow to about 20 km/h and watch the road surface.", "", now))
+            "q:1" to CopilotLine("q:1", "A pothole was reported ahead; watch the road surface and prepare to slow.", true, 2600)))
+        val q = listOf(Question("q:1", "Any potholes ahead?", "A pothole was reported ahead. Watch the road surface and prepare to slow.", "", now))
         compose.setContent {
             RoadMeshTheme { Surface(color = Tokens.Ink) {
                 Column(Modifier.fillMaxSize()) {
@@ -143,7 +191,7 @@ class ScreenshotTest {
         val picture = RoadPicture.combine(here, known().filter { it.kind == HazardKind.ACCIDENT }, replies, now)
         val state = SessionState(Role.RECEIVER, Mode.STAGE, running = true, ready = true, node = NodeId(14), chain = chain(4), known = known(), picture = picture, pictureAtMs = now - 3_000)
         val q = listOf(Question("q:2", "What's the road like ahead?", picture.forecast.advice.take(2).joinToString(" "), picture.facts(), now, picture))
-        val copilot = ready.copy(lines = mapOf("q:2" to CopilotLine("q:2", "Traffic is slowing about 400 m ahead; ease off to about 28 km/h now so you reach it after it clears.", true, 2900)))
+        val copilot = ready.copy(lines = mapOf("q:2" to CopilotLine("q:2", "Traffic is slowing ahead. Keep space and prepare to stop; clearance is unknown.", true, 2900)))
         compose.setContent { RoadMeshTheme { Surface(color = Tokens.Ink) { ReceivedTab(app, state, copilot, q, now, actions) } } }
         shot("7-road-E")
     }
@@ -154,7 +202,8 @@ class ScreenshotTest {
         app.reports.add(HazardKind.TRIPLE_RIDING, "3 people riding one two-wheeler", 0.74, 12.0, 77.0, true, null, true, "clip")
         app.reports.add(HazardKind.NO_HELMET, "two-wheeler rider without a helmet", 0.66, 12.0, 77.0, true, null, true, "clip")
         app.reports.add(HazardKind.ACCIDENT, "reported over the mesh by phone A", null, null, null, true, null, false, "mesh", fromMesh = true)
-        compose.setContent { RoadMeshTheme { Surface(color = Tokens.Ink) { ReportsTab(app, app.reports.flow.value) } } }
+        val reportSnapshot = app.reports.flow.value
+        compose.setContent { RoadMeshTheme { Surface(color = Tokens.Ink) { ReportsTab(app, reportSnapshot) } } }
         shot("8-reports")
     }
 
@@ -176,5 +225,41 @@ class ScreenshotTest {
         compose.setContent { RoadMeshTheme { WakeUpContent(d.copy(alarm = d.alarm!!.copy(level = Alertness.UNRESPONSIVE, reason = "eyes shut for 3.0 s"),
             sos = listOf(SosSent(d.alarm!!.copy(level = Alertness.UNRESPONSIVE, reason = "eyes shut for 3.0 s"), true, now))), {}) } }
         shot("driver_wake_up")
+    }
+
+    @Test fun swarmConnectedAndComparisons() {
+        compose.setContent { RoadMeshTheme { Surface(color = Tokens.Ink) { SwarmScreen(SessionState(Role.RECEIVER, Mode.STAGE)) } } }
+        shot("9-swarm-connected")
+        compose.onNodeWithText("Navigation is a configurable information baseline, not a test of Google Maps. V2I can win when its sensor has coverage.").performScrollTo()
+        shot("10-swarm-comparison")
+        compose.onNodeWithText("The unchanged model underestimates a new traffic regime and performs worse than the fixed estimate. Past clearance is not permission to proceed.").performScrollTo()
+        shot("15-swarm-learning-shift")
+        compose.onNodeWithText("Replay only. No live training, driving-policy learning or passage permission. These are prediction errors, not travel-time savings.").performScrollTo()
+        shot("16-swarm-learning-adaptation")
+    }
+
+    @Test fun swarmDisconnectedAndAlternatePath() {
+        compose.setContent { RoadMeshTheme { Surface(color = Tokens.Ink) {
+            SwarmScreen(SessionState(Role.RECEIVER, Mode.STAGE), initialConfig = SwarmScenarioConfig(relayEnabled = false))
+        } } }
+        shot("11-swarm-no-route")
+        compose.onNodeWithContentDescription("Alternative neighbour D").performScrollTo().performClick()
+        compose.onAllNodesWithText("A → D → C")[0].assertExists()
+        compose.onNodeWithText("SYNTHETIC SCENARIO").performScrollTo()
+        shot("12-swarm-alternate-path")
+    }
+
+    @Test fun swarmExpired() {
+        compose.setContent { RoadMeshTheme { Surface(color = Tokens.Ink) {
+            SwarmScreen(SessionState(Role.RECEIVER, Mode.STAGE), initialConfig = SwarmScenarioConfig(elapsedMs = 16_000))
+        } } }
+        shot("13-swarm-expired")
+    }
+
+    @Test fun swarmPhoneWithoutPosition() {
+        compose.setContent { RoadMeshTheme { Surface(color = Tokens.Ink) {
+            SwarmScreen(SessionState(Role.RECEIVER, Mode.ROAD), initialLive = true)
+        } } }
+        shot("14-swarm-phone-unknown")
     }
 }
