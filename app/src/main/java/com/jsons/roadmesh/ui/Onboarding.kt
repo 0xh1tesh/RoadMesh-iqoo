@@ -79,8 +79,8 @@ import kotlin.math.pow
             }
             Row(Modifier.widthIn(max = 640.dp).fillMaxWidth().padding(24.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (step > 0) GhostButton("Back", { step-- }, Modifier.weight(1f), height = 56.dp)
-                PrimaryButton(when (step) { 0 -> "Get started"; 1 -> "Continue"; else -> "Start as ${role.name.first()} · ${role.title}" },
-                    { if (step < 2) step++ else finish(vehicle, role) }, Modifier.weight(2f))
+                PrimaryButton(when (step) { 0 -> "Get started"; 1 -> "Continue"; else -> "Start the mesh" },
+                    { if (step < 2) step++ else finish(vehicle, Role.RELAY) }, Modifier.weight(2f))
             }
         }
     }
@@ -88,8 +88,8 @@ import kotlin.math.pow
 
 @Composable private fun Intro() {
     RoadScene(Modifier.fillMaxWidth().height(300.dp), highlight = null)
-    Text("See what the car ahead sees", style = MaterialTheme.typography.headlineLarge.copy(fontSize = 34.sp, lineHeight = 36.sp))
-    Text("Phones on the dash watch the road with an on-device detector and pass hazard warnings back along the road over Bluetooth. No internet, no new hardware.",
+    Text("Know the road before you reach it", style = MaterialTheme.typography.headlineLarge.copy(fontSize = 34.sp, lineHeight = 36.sp))
+    Text("Phones on the dash spot potholes, accidents and traffic violations with an on-device detector, pass warnings back along the road over Bluetooth, and help ease off early so slowdowns don't become jams. No internet, no new hardware.",
         color = Tokens.Muted, fontSize = 17.sp, lineHeight = 24.sp)
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         listOf("Observe", "Relay", "Receive").forEachIndexed { i, label ->
@@ -131,23 +131,21 @@ fun roleColor(i: Int) = when (i) { 0 -> Color(0xFF1F4FB8); 1 -> Color(0xFF6B2FB3
 }
 
 @Composable private fun ConvoyStep(selected: Role, pick: (Role) -> Unit) {
-    Text("Where is this phone in the convoy?", style = MaterialTheme.typography.headlineLarge.copy(fontSize = 30.sp, lineHeight = 33.sp))
-    RoadScene(Modifier.fillMaxWidth().height(200.dp), highlight = selected.ordinal)
-    val jobs = listOf("Front · watches the road and starts the warning", "Middle · re-infers and relays it", "Back · receives the warning")
-    Role.entries.forEachIndexed { i, role ->
-        val on = role == selected
-        Surface(onClick = { pick(role) }, shape = RoundedCornerShape(18.dp), color = Tokens.Panel, border = BorderStroke(if (on) 2.dp else 1.dp, if (on) Tokens.Yellow else Tokens.Line),
-            modifier = Modifier.fillMaxWidth().semantics { contentDescription = "${role.title}${if (on) ", selected" else ""}" }) {
-            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                RoleBadge('A' + i, roleColor(i), 40.dp)
-                Column(Modifier.weight(1f)) {
-                    Text(role.title, fontWeight = FontWeight.ExtraBold, fontSize = 17.sp)
-                    Text(jobs[i], color = Tokens.Muted, fontSize = 14.sp)
-                }
+    Text("Your place comes from when you start", style = MaterialTheme.typography.headlineLarge.copy(fontSize = 30.sp, lineHeight = 33.sp))
+    RoadScene(Modifier.fillMaxWidth().height(200.dp), highlight = null)
+    listOf(Triple('A', 0, "First phone to start the mesh · Observer" to "Watches the road (dashcam or test warnings). Its findings go to every phone behind."),
+        Triple('B', 1, "Phones started after it · Relays" to "Each passes warnings to the phone that started after it. Nothing to tap."),
+        Triple('C', 2, "Newest phone · Receiver" to "Warnings end here and are spoken. When another phone starts, it becomes a relay.")).forEach { (letter, i, text) ->
+        Row(Modifier.fillMaxWidth().background(Tokens.Panel, RoundedCornerShape(18.dp)).padding(16.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            RoleBadge(letter, roleColor(i), 40.dp)
+            Column(Modifier.weight(1f)) {
+                Text(text.first, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp)
+                Text(text.second, color = Tokens.Muted, fontSize = 14.sp, lineHeight = 19.sp)
             }
         }
     }
-    Text("Every phone gets all three tabs. Its place decides which link of the A → B → C chain it uses.", color = Tokens.Faint, fontSize = 13.sp, lineHeight = 18.sp)
+    Text("Start the phones one at a time, a couple of seconds apart, with Bluetooth on.", color = Tokens.Faint, fontSize = 13.sp, lineHeight = 18.sp)
 }
 
 /**

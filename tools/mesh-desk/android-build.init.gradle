@@ -1,0 +1,5 @@
+// Keep this APK packaging separate from the regular build outputs.
+gradle.beforeProject { p ->
+    def module = p.path == ':' ? 'root' : p.path.substring(1).replace(':', '_')
+    p.layout.buildDirectory.set(new File(p.rootProject.projectDir, 'tools/mesh-desk/artifacts/android-build/' + module))
+}

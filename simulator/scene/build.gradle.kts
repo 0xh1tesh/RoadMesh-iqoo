@@ -25,5 +25,8 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.2")
     implementation("com.google.ar:core:1.48.0")
     implementation("com.google.android.gms:play-services-nearby:19.3.0")
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
+    // QNN build of ONNX Runtime: the same CPU runtime plus the Hexagon NPU provider. QNN 2.50 is the runtime the NPU
+    // probe verified on the iQOO 15 (SM8850); ORT's own pin is older.
+    implementation("com.microsoft.onnxruntime:onnxruntime-android-qnn:1.29.0")
+    implementation("com.qualcomm.qti:qnn-runtime:2.50.0")
 }

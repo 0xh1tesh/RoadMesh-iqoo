@@ -13,7 +13,7 @@ class FleetSimulationTest {
     private fun runFleet(size: Int, partition: Boolean = false): Result {
         val clock = TestClock()
         val random = Random(2048 + size)
-        val profile = MeshProfile(mode = Mode.ROAD)
+        val profile = MeshProfile(mode = Mode.ROAD, initialTtl = 2)
         val fixes = List(size) { i -> GeoFix(12.0 - i * 20.0 / 111_195, 77.0, 0.0, 10.0, false) }
         val engines = List(size) { i -> MeshEngine(NodeId(i + 1L), i + 1, 1000 + i.toLong(), profile, clock,
             PositionSource { fixes[i] }, random = { bound -> random.nextInt(bound) }) }

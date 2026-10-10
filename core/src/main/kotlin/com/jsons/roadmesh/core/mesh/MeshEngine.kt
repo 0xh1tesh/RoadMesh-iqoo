@@ -26,6 +26,10 @@ class MeshEngine(
     private val links: LinkPolicy = OpenLinks,
     private val announce: Boolean = true,
     private val random: (Int) -> Int = { kotlin.random.Random.nextInt(it) },
+    /** This node's current chain position, stamped on every frame it sends. */
+    private val rank: () -> Int = { NO_RANK },
+    /** False when nobody is behind this node (the last phone in the chain), so it only receives. */
+    private val relayGate: () -> Boolean = { true },
 ) {
     private data class Seen(val until: Long)
     private data class Neighbor(var last: Long, var window: Long, var count: Int)
@@ -51,14 +55,14 @@ class MeshEngine(
         if (seen.size >= profile.dedupCapacity) return drop("dedup_full")
         ownCount++
         val id = MessageId(node, session, ++sequence)
-        val packet = Packet(PacketClass.ALERT, alias, sequence and 0xffff, profile.initialTtl, 0,
+        val packet = Packet(PacketClass.ALERT, alias, sequence and 0xffff, minOf(profile.initialTtl, 3), 0,
             (if (fix.synthetic) PacketFlags.SYNTH_POS else 0) or (if (fix.heading == null) PacketFlags.NO_HEADING else 0),
             Math.floorMod(clock.utcMs(), 3_600_000L).toInt() / 100,
             (fix.lat * 1e7).roundToInt(), (fix.lon * 1e7).roundToInt(),
             fix.speedMps?.times(100)?.roundToInt() ?: Packet.SPEED_UNKNOWN,
             fix.heading?.let { ((it % 360) * 256 / 360).roundToInt() and 255 } ?: 0,
             hazard.kind.cause, hazard.kind.subCause, hazard.detail?.p1 ?: 0, hazard.detail?.p2 ?: 0, alias and 255, (profile.maxAgeMs / 1_000).toInt().coerceAtLeast(1))
-        val frame = HazardEnvelope(packet, id, node, hazard.provenance)
+        val frame = HazardEnvelope(packet, id, node, hazard.provenance, profile.initialTtl, 0, rank())
         seen[id] = Seen(now + profile.dedupRetentionMs)
         return listOf(MeshEffect.Originated(frame, hazard.sourceEvent), MeshEffect.Transmit(frame, false))
     }
@@ -67,11 +71,11 @@ class MeshEngine(
         val now = clock.monotonicMs(); expire(now)
         val e = HazardEnvelopeCodec.decode(raw) ?: return drop("decode_rejected")
         val p = e.packet
-        if (!links.accepts(node, e.forwarder)) return drop("link_filtered")
+        if (!links.accepts(node, e.forwarder, e.rank)) return drop("link_filtered")
         if (e.id.origin == node) return drop("own_copy")
         val kind = HazardKind.from(p.cause, p.subCause) ?: return drop("cause_rejected")
         if (p.cls != PacketClass.ALERT || p.flags and PacketFlags.SIGNED != 0 || p.flags and PacketFlags.PROXY != 0) return drop("unsupported_packet")
-        if (p.hop + p.ttl != profile.initialTtl) return drop("hop_budget")
+        if (e.hop + e.ttl != profile.initialTtl) return drop("hop_budget")
         if (!permitted(e.provenance, p.flags and PacketFlags.SYNTH_POS != 0)) return drop("provenance_rejected")
         val age = generationAgeMs(p.tGenDeci, clock.utcMs())
         val validity = minOf(profile.maxAgeMs, p.validityS * 1_000L)
@@ -81,7 +85,7 @@ class MeshEngine(
         val own = positions.current()?.takeIf { it.valid() }
         val distance = own?.let { distanceM(it, remote) }
         // Origin location is retained across relays. Permit the full configured radio budget.
-        if (distance != null && distance > (p.hop + 1) * profile.rangeM * 1.5) return drop("implausible_distance")
+        if (distance != null && distance > (e.hop + 1) * profile.rangeM * 1.5) return drop("implausible_distance")
         val neighbor = neighbors[e.forwarder] ?: run {
             if (neighbors.size >= profile.neighborCapacity) return drop("neighbors_full")
             Neighbor(now, now, 0).also { neighbors[e.forwarder] = it }
@@ -89,7 +93,7 @@ class MeshEngine(
         neighbor.last = now
         // Valid overheard progress can cancel a pending relay even though the event is a duplicate.
         pending[e.id]?.let { q ->
-            if (p.hop > q.frame.packet.hop && e.forwarder != node) q.heard += e.forwarder
+            if (e.hop > q.frame.hop && e.forwarder != node) q.heard += e.forwarder
             if (q.heard.size >= profile.suppressionCopies) {
                 pending.remove(e.id)
                 return listOf(MeshEffect.Notice("relay_suppressed"))
@@ -109,11 +113,12 @@ class MeshEngine(
         if (seen.size >= profile.dedupCapacity) return drop("dedup_full")
         seen[e.id] = Seen(now + profile.dedupRetentionMs)
         val effects = mutableListOf<MeshEffect>(MeshEffect.Received(e))
-        if (announce && own != null && distance != null && relevant(own, remote, distance)) {
+        if (announce && kind.use == HazardUse.CAUTION && own != null && distance != null && relevant(own, remote, distance)) {
             // This base has one trust tier: caution. Forwarders never create independent evidence.
             effects += MeshEffect.Announce(e, kind, distance.roundToInt())
         }
-        if (p.ttl > 0) {
+        if (e.ttl > 0 && !relayGate()) effects += MeshEffect.Notice("relay_not_needed", "last in chain")
+        else if (e.ttl > 0) {
             if (pending.size >= profile.pendingCapacity) effects += MeshEffect.Notice("pending_full")
             else {
                 val delay = (profile.maxRelayDelayMs * (1 - ((distance ?: 0.0) / profile.rangeM).coerceIn(0.0, 1.0))).toLong() + random(profile.jitterMs + 1)
@@ -135,7 +140,7 @@ class MeshEngine(
             if (q.due > now) continue
             iterator.remove()
             if (relayCount >= profile.relayPerSecond) { effects += MeshEffect.Notice("relay_rate"); continue }
-            q.frame.relayedBy(node, alias)?.let { relayCount++; effects += MeshEffect.Transmit(it, true) }
+            q.frame.relayedBy(node, alias, rank())?.let { relayCount++; effects += MeshEffect.Transmit(it, true) }
         }
         return effects
     }

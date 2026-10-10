@@ -27,7 +27,11 @@ class BleHazardTransport(context: Context, private val report: (String) -> Unit,
     @Volatile private var scanning = false
     @Volatile private var nextScanAttempt = 0L
     private val scanStarts = ArrayDeque<Long>()
-    private val started = CompletableDeferred<AdvertisingSet>()
+    @Volatile private var started = CompletableDeferred<AdvertisingSet>()
+    @Volatile private var beaconSet: AdvertisingSet? = null
+    @Volatile private var beaconStarted: CompletableDeferred<AdvertisingSet>? = null
+    @Volatile private var beaconData: CompletableDeferred<Int>? = null
+    @Volatile private var beaconUnavailable = false
     @Volatile private var dataReady: CompletableDeferred<Int>? = null
     @Volatile private var enableReady: CompletableDeferred<Int>? = null
     @Volatile private var ended: CompletableDeferred<Unit>? = null
@@ -51,7 +55,8 @@ class BleHazardTransport(context: Context, private val report: (String) -> Unit,
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             if (closed) return
             val raw = result.scanRecord?.getManufacturerSpecificData(COMPANY_ID) ?: return
-            if (raw.firstOrNull()?.toInt()?.and(255) == 0x52) onFrame(raw.copyOf())
+            val magic = raw.firstOrNull()?.toInt()?.and(255)
+            if (magic == 0x52 || magic == 0x53) onFrame(raw.copyOf())
         }
         override fun onBatchScanResults(results: MutableList<ScanResult>) { results.forEach { onScanResult(0, it) } }
         override fun onScanFailed(errorCode: Int) {
@@ -65,16 +70,64 @@ class BleHazardTransport(context: Context, private val report: (String) -> Unit,
         this.onFrame = onFrame
         val a = adapter ?: error("Bluetooth unavailable")
         check(a.isEnabled) { "Turn Bluetooth on" }
-        check(a.isLeExtendedAdvertisingSupported) { "Extended BLE advertising is required for this envelope. Check all three phones." }
-        check(a.leMaximumAdvertisingDataLength >= 64) { "Extended advertisement payload too small" }
-        val advertiser = a.bluetoothLeAdvertiser ?: error("BLE advertiser unavailable")
-        val params = AdvertisingSetParameters.Builder().setLegacyMode(false).setConnectable(false).setScannable(false)
-            .setInterval(160).setTxPowerLevel(AdvertisingSetParameters.TX_POWER_HIGH).build()
-        advertiser.startAdvertisingSet(params, AdvertiseData.Builder().build(), null, null, null, advertisingCallback, handler)
+        check(a.isLeExtendedAdvertisingSupported) { "Extended BLE advertising is required for this envelope. Check every phone." }
+        check(a.leMaximumAdvertisingDataLength >= 160) { "Extended advertisement payload too small" }
+        openBurstSet()
+        startScan(SystemClock.elapsedRealtime())
+        report("BLE ready · extended · burst set + presence set")
+    }
+
+    /** Android rejects intervals under INTERVAL_LOW (160 units, 100 ms) with an exception, so never ask for less. */
+    private fun params(interval: Int) = AdvertisingSetParameters.Builder().setLegacyMode(false).setConnectable(false).setScannable(false)
+        .setInterval(interval.coerceAtLeast(AdvertisingSetParameters.INTERVAL_LOW)).setTxPowerLevel(AdvertisingSetParameters.TX_POWER_HIGH).build()
+
+    /** The set hazard and query bursts go out on, at the fastest interval Android allows (100 ms). */
+    private suspend fun openBurstSet() {
+        val advertiser = adapter?.bluetoothLeAdvertiser ?: error("BLE advertiser unavailable")
+        started = CompletableDeferred()
+        advertiser.startAdvertisingSet(params(AdvertisingSetParameters.INTERVAL_LOW), AdvertiseData.Builder().build(), null, null, null, advertisingCallback, handler)
         set = withTimeout(3_000) { started.await() }
         enabled(false)
-        startScan(SystemClock.elapsedRealtime())
-        report("BLE ready · extended · one TX set")
+    }
+
+    private val beaconCallback = object : AdvertisingSetCallback() {
+        override fun onAdvertisingSetStarted(advertisingSet: AdvertisingSet?, txPower: Int, status: Int) {
+            if (closed) { runCatching { adapter?.bluetoothLeAdvertiser?.stopAdvertisingSet(this) }; return }
+            if (status == ADVERTISE_SUCCESS && advertisingSet != null) beaconStarted?.complete(advertisingSet)
+            else beaconStarted?.completeExceptionally(IllegalStateException("presence set start: $status"))
+        }
+        override fun onAdvertisingDataSet(advertisingSet: AdvertisingSet?, status: Int) { beaconData?.complete(status) }
+    }
+
+    override suspend fun beacon(bytes: ByteArray): Boolean {
+        if (closed || beaconUnavailable) return false
+        val data = AdvertiseData.Builder().addManufacturerData(COMPANY_ID, bytes).build()
+        val current = beaconSet
+        if (current == null) {
+            val advertiser = adapter?.bluetoothLeAdvertiser ?: return false
+            val ready = CompletableDeferred<AdvertisingSet>().also { beaconStarted = it }
+            // Always on, every 200 ms, until the session stops. A second set is optional hardware; without it the
+            // session falls back to short presence bursts on the shared set.
+            advertiser.startAdvertisingSet(params(320), data, null, null, null, 0, 0, beaconCallback, handler)
+            beaconSet = runCatching { withTimeout(2_000) { ready.await() } }.getOrElse {
+                beaconUnavailable = true; report("presence set unavailable (${it.message}); presence uses bursts"); return false
+            }
+            return true
+        }
+        val done = CompletableDeferred<Int>().also { beaconData = it }
+        current.setAdvertisingData(data)
+        val status = runCatching { withTimeout(300) { done.await() } }.getOrDefault(-1)
+        beaconData = null
+        return status == AdvertisingSetCallback.ADVERTISE_SUCCESS
+    }
+
+    override suspend fun recover() {
+        report("recovering burst set")
+        runCatching { adapter?.bluetoothLeAdvertiser?.stopAdvertisingSet(advertisingCallback) }
+        set = null; dataReady = null; enableReady = null; ended = null
+        kotlinx.coroutines.delay(150)
+        openBurstSet()
+        report("burst set recovered")
     }
 
     override suspend fun transmit(bytes: ByteArray, relay: Boolean): Int {
@@ -85,7 +138,7 @@ class BleHazardTransport(context: Context, private val report: (String) -> Unit,
         check(withTimeout(300) { data.await() } == AdvertisingSetCallback.ADVERTISE_SUCCESS) { "advertising data rejected" }
         dataReady = null
         // Fixed burst counts limit channel load. Origin repeats longer to tolerate packet loss.
-        val events = if (relay) 3 else 10
+        val events = if (relay) 4 else 10
         val finish = CompletableDeferred<Unit>().also { ended = it }
         enabled(true, events)
         var automaticallyDisabled = false
@@ -120,7 +173,8 @@ class BleHazardTransport(context: Context, private val report: (String) -> Unit,
             return
         }
         val scanner = adapter?.bluetoothLeScanner ?: error("BLE scanner unavailable")
-        val filter = ScanFilter.Builder().setManufacturerData(COMPANY_ID, byteArrayOf(0x52), byteArrayOf(0xff.toByte())).build()
+        // 0x52 (hazard envelope) and 0x53 (control frame) differ only in the lowest bit.
+        val filter = ScanFilter.Builder().setManufacturerData(COMPANY_ID, byteArrayOf(0x52), byteArrayOf(0xfe.toByte())).build()
         val settings = ScanSettings.Builder().setLegacy(false).setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES).setReportDelay(0).build()
         scanStarts.addLast(now)
@@ -149,7 +203,8 @@ class BleHazardTransport(context: Context, private val report: (String) -> Unit,
         onFrame = {}
         runCatching { adapter?.bluetoothLeScanner?.stopScan(scanCallback) }
         runCatching { adapter?.bluetoothLeAdvertiser?.stopAdvertisingSet(advertisingCallback) }
-        set = null; scanning = false
+        runCatching { adapter?.bluetoothLeAdvertiser?.stopAdvertisingSet(beaconCallback) }
+        set = null; beaconSet = null; scanning = false
         thread.quitSafely()
     }
     companion object { const val COMPANY_ID = 0xffff }

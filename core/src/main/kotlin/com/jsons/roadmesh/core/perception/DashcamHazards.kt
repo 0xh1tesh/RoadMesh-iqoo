@@ -7,19 +7,26 @@ import kotlin.math.max
 import kotlin.math.min
 
 enum class ObjectClass(val widthM: Double?) {
-    PERSON(null), BICYCLE(0.6), CAR(1.75), MOTORCYCLE(0.8), BUS(2.5), TRUCK(2.5), OTHER(null);
+    PERSON(null), BICYCLE(0.6), CAR(1.75), MOTORCYCLE(0.8), BUS(2.5), TRUCK(2.5), TRAFFIC_LIGHT(null),
+    /** From the RESILANE road model, not COCO. */
+    POTHOLE(null), HELMET(null), NO_HELMET(null), OTHER(null);
 
     val vehicle get() = this == CAR || this == BUS || this == TRUCK || this == MOTORCYCLE
     val rideable get() = this == BICYCLE || this == MOTORCYCLE
 
     companion object {
         /** COCO ids as the YOLO head numbers them. */
-        fun coco(id: Int) = when (id) { 0 -> PERSON; 1 -> BICYCLE; 2 -> CAR; 3 -> MOTORCYCLE; 5 -> BUS; 7 -> TRUCK; else -> OTHER }
+        fun coco(id: Int) = when (id) { 0 -> PERSON; 1 -> BICYCLE; 2 -> CAR; 3 -> MOTORCYCLE; 5 -> BUS; 7 -> TRUCK; 9 -> TRAFFIC_LIGHT; else -> OTHER }
+        /** Class ids of the RESILANE road model (tools/kaggle/road_yolo): pothole, helmet, no_helmet. */
+        fun road(id: Int) = when (id) { 0 -> POTHOLE; 1 -> HELMET; 2 -> NO_HELMET; else -> OTHER }
     }
 }
 
+/** A traffic light's lit colour, read from the pixels inside its box. */
+enum class LightColour { RED, AMBER, GREEN }
+
 /** One detection in normalized frame coordinates: (0,0) top-left, (1,1) bottom-right. */
-data class SeenObject(val cls: ObjectClass, val score: Float, val x1: Float, val y1: Float, val x2: Float, val y2: Float) {
+data class SeenObject(val cls: ObjectClass, val score: Float, val x1: Float, val y1: Float, val x2: Float, val y2: Float, val light: LightColour? = null) {
     val w get() = x2 - x1
     val h get() = y2 - y1
     val cx get() = (x1 + x2) / 2
