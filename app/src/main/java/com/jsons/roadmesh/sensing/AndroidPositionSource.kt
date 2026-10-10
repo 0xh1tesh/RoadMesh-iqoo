@@ -23,7 +23,9 @@ class AndroidPositionSource(context: Context) : PositionSource, LocationListener
         if (age < 0 || age > 5_000_000_000L || !l.hasAccuracy() || !l.accuracy.isFinite() || l.accuracy !in 0f..30f) return null
         return GeoFix(l.latitude, l.longitude, if (l.hasBearing()) l.bearing.toDouble() else null,
             if (l.hasSpeed()) l.speed.toDouble() else null, false, l.accuracy.toDouble(),
-            if (l.hasBearingAccuracy()) l.bearingAccuracyDegrees.toDouble().takeIf { it.isFinite() && it in 0.0..180.0 } else null)
+            if (l.hasBearingAccuracy()) l.bearingAccuracyDegrees.toDouble().takeIf { it.isFinite() && it in 0.0..180.0 } else null,
+            sampledAtMs = l.elapsedRealtimeNanos / 1_000_000L,
+            speedAccuracyMps = if (l.hasSpeedAccuracy()) l.speedAccuracyMetersPerSecond.toDouble().takeIf { it.isFinite() && it >= 0 } else null)
             .takeIf { it.valid() }
     }
 }

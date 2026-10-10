@@ -42,19 +42,21 @@ import kotlin.math.roundToInt
     s: SessionState,
     modifier: Modifier = Modifier,
     onAskRoad: (() -> Unit)? = null,
-    onReportNarrowing: (() -> String)? = null,
     initialConfig: SwarmScenarioConfig = SwarmScenarioConfig(),
     initialLive: Boolean = false,
 ) {
     var phoneView by rememberSaveable { mutableStateOf(initialLive) }
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Text("COOPERATIVE AWARENESS", fontFamily = Michroma, fontSize = 10.sp, color = Tokens.Yellow, letterSpacing = 1.sp)
+        Text("AUTOMATIC COOPERATIVE PERCEPTION", fontFamily = Michroma, fontSize = 10.sp, color = Tokens.Yellow, letterSpacing = 1.sp)
         Text("Beyond one\nvehicle’s view.", fontFamily = Saira, fontSize = 31.sp, lineHeight = 34.sp, fontWeight = FontWeight.ExtraBold, color = Tokens.Paper)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = !phoneView, onClick = { phoneView = false }, label = { Text("Swarm lab") })
+            FilterChip(selected = !phoneView, onClick = { phoneView = false }, label = { Text("Pipeline lab") })
             FilterChip(selected = phoneView, onClick = { phoneView = true }, label = { Text("This phone") })
         }
-        if (phoneView) LiveSwarmContent(s, onAskRoad, onReportNarrowing) else SwarmLabContent(initialConfig)
+        if (phoneView) LiveSwarmContent(s, onAskRoad) else {
+            AutomationLab()
+            SwarmLabContent(initialConfig)
+        }
         Spacer(Modifier.height(16.dp))
     }
 }
@@ -217,9 +219,8 @@ import kotlin.math.roundToInt
     }
 }
 
-@Composable private fun LiveSwarmContent(s: SessionState, onAskRoad: (() -> Unit)?, onReportNarrowing: (() -> String)?) {
+@Composable private fun LiveSwarmContent(s: SessionState, onAskRoad: (() -> Unit)?) {
     var now by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
-    var reportFeedback by remember(s.mode) { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) { while (true) { now = SystemClock.elapsedRealtime(); delay(1_000) } }
     val stage = s.mode == Mode.STAGE
     val assessment = sessionSwarmAssessment(s, now)
@@ -234,23 +235,13 @@ import kotlin.math.roundToInt
             else "Only records held by this phone are shown. Missing information remains unknown.", style = MaterialTheme.typography.bodyMedium, color = Tokens.Muted)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             SwarmMetric("${s.chain.count { !it.self }}", "peers heard", Modifier.weight(1f))
-            SwarmMetric("$own", "own reports", Modifier.weight(1f))
-            SwarmMetric("$shared", "shared reports", Modifier.weight(1f))
+            SwarmMetric("$own", "own observations", Modifier.weight(1f))
+            SwarmMetric("$shared", "shared observations", Modifier.weight(1f))
         }
         Text("Evidence counts include retained records; only fresh, attributed records can support the advisory below.", style = MaterialTheme.typography.bodySmall, color = Tokens.Faint)
         if (onAskRoad != null) OutlinedButton(onClick = onAskRoad, enabled = s.ready && !s.asking, modifier = Modifier.fillMaxWidth()) {
             Text(if (s.asking) "Asking nearby phones…" else "Ask nearby phones for their road picture")
         }
-    }
-    if (onReportNarrowing != null) SwarmPanel {
-        SwarmEyebrow(if (stage) "SHARE A STAGE REPORT" else "SHARE A ROAD OBSERVATION")
-        Text("Road narrowed here", style = MaterialTheme.typography.titleLarge, color = Tokens.Paper)
-        Text("A stopped bus, roadworks or another obstruction is reducing usable road width at your position. Send a manual caution to nearby phones.",
-            style = MaterialTheme.typography.bodyMedium, color = Tokens.Muted)
-        PrimaryButton("Report narrowing", onClick = { reportFeedback = onReportNarrowing() }, modifier = Modifier.fillMaxWidth(), enabled = s.ready)
-        reportFeedback?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Tokens.Yellow) }
-        Text(if (stage) "Uses synthetic stage position and demo provenance." else "Uses this phone’s available position. A queued report is not confirmation that another phone received it.",
-            style = MaterialTheme.typography.bodySmall, color = Tokens.Faint)
     }
     s.picture?.let { picture ->
         SwarmPanel {

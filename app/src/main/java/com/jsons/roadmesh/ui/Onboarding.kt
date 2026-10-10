@@ -49,12 +49,11 @@ import kotlin.math.pow
 
 /**
  * First-run onboarding: an animated road where a warning travels from the front phone (A) to B and on to C, then the
- * vehicle type and this phone's place in the convoy. [finish] saves both and starts the mesh.
+ * vehicle type and dashboard mounting. Every live phone can sense, relay and receive.
  */
 @Composable fun Onboarding(initialVehicle: VehicleType, initialRole: Role, finish: (VehicleType, Role) -> Unit) {
     var step by rememberSaveable { mutableIntStateOf(0) }
     var vehicle by rememberSaveable { mutableStateOf(initialVehicle) }
-    var role by rememberSaveable { mutableStateOf(initialRole) }
     Column(Modifier.fillMaxSize().background(Tokens.Ink)) {
         SignalEdge(Tokens.Yellow)
         Column(Modifier.fillMaxSize().safeDrawingPadding(), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -73,13 +72,13 @@ import kotlin.math.pow
                     when (s) {
                         0 -> Intro()
                         1 -> VehicleStep(vehicle) { vehicle = it }
-                        else -> ConvoyStep(role) { role = it }
+                        else -> MountStep()
                     }
                 }
             }
             Row(Modifier.widthIn(max = 640.dp).fillMaxWidth().padding(24.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (step > 0) GhostButton("Back", { step-- }, Modifier.weight(1f), height = 56.dp)
-                PrimaryButton(when (step) { 0 -> "Get started"; 1 -> "Continue"; else -> "Start the mesh" },
+                PrimaryButton(when (step) { 0 -> "Get started"; 1 -> "Continue"; else -> "Open dashboard" },
                     { if (step < 2) step++ else finish(vehicle, Role.RELAY) }, Modifier.weight(2f))
             }
         }
@@ -88,8 +87,8 @@ import kotlin.math.pow
 
 @Composable private fun Intro() {
     RoadScene(Modifier.fillMaxWidth().height(300.dp), highlight = null)
-    Text("Know the road before you reach it", style = MaterialTheme.typography.headlineLarge.copy(fontSize = 34.sp, lineHeight = 36.sp))
-    Text("Phones on the dash spot potholes, accidents and traffic violations with an on-device detector, pass warnings back along the road over Bluetooth, and help ease off early so slowdowns don't become jams. No internet, no new hardware.",
+    Text("Every vehicle becomes a sensing node", style = MaterialTheme.typography.headlineLarge.copy(fontSize = 34.sp, lineHeight = 36.sp))
+    Text("A mounted phone detects visible vehicles and obstacles locally. Motion over several frames creates event candidates; nearby phones share them automatically over Bluetooth. No incident report tap.",
         color = Tokens.Muted, fontSize = 17.sp, lineHeight = 24.sp)
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         listOf("Observe", "Relay", "Receive").forEachIndexed { i, label ->
@@ -106,7 +105,7 @@ fun roleColor(i: Int) = when (i) { 0 -> Color(0xFF1F4FB8); 1 -> Color(0xFF6B2FB3
 
 @Composable private fun VehicleStep(selected: VehicleType, pick: (VehicleType) -> Unit) {
     Text("What do you drive?", style = MaterialTheme.typography.headlineLarge.copy(fontSize = 32.sp))
-    Text("The co-pilot tailors its advice to your vehicle, and the phones behind you hear what kind of vehicle saw the hazard.",
+    Text("Shared observations include this vehicle type. Each participating phone can sense, relay and receive; you do not choose a fixed network role.",
         color = Tokens.Muted, fontSize = 16.sp, lineHeight = 23.sp)
     val types = listOf(VehicleType.CAR, VehicleType.TWO_WHEELER, VehicleType.AUTO, VehicleType.BUS_TRUCK)
     val motion = !reducedMotion()
@@ -130,22 +129,23 @@ fun roleColor(i: Int) = when (i) { 0 -> Color(0xFF1F4FB8); 1 -> Color(0xFF6B2FB3
     }
 }
 
-@Composable private fun ConvoyStep(selected: Role, pick: (Role) -> Unit) {
-    Text("Your place comes from when you start", style = MaterialTheme.typography.headlineLarge.copy(fontSize = 30.sp, lineHeight = 33.sp))
-    RoadScene(Modifier.fillMaxWidth().height(200.dp), highlight = null)
-    listOf(Triple('A', 0, "First phone to start the mesh · Observer" to "Watches the road (dashcam or test warnings). Its findings go to every phone behind."),
-        Triple('B', 1, "Phones started after it · Relays" to "Each passes warnings to the phone that started after it. Nothing to tap."),
-        Triple('C', 2, "Newest phone · Receiver" to "Warnings end here and are spoken. When another phone starts, it becomes a relay.")).forEach { (letter, i, text) ->
-        Row(Modifier.fillMaxWidth().background(Tokens.Panel, RoundedCornerShape(18.dp)).padding(16.dp), verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            RoleBadge(letter, roleColor(i), 40.dp)
+@Composable private fun MountStep() {
+    Text("Mount once. Observe together.", style = MaterialTheme.typography.headlineLarge.copy(fontSize = 30.sp, lineHeight = 33.sp))
+    RoadScene(Modifier.fillMaxWidth().height(160.dp), highlight = null)
+    listOf(
+        "Face the rear camera toward the road" to "Mount securely while parked. Leave the lens and road view unobstructed.",
+        "Start drive on each participating phone" to "Allow camera, Bluetooth and precise location. Every phone can analyse its own view and relay received events.",
+        "Keep the dashboard open" to "Detection runs on the phone. The camera pauses when the app leaves the foreground; warnings are advisory.",
+    ).forEachIndexed { i, item ->
+        Row(Modifier.fillMaxWidth().background(Tokens.Panel, RoundedCornerShape(18.dp)).padding(16.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Text("${i + 1}", color = Tokens.Yellow, fontWeight = FontWeight.ExtraBold, fontSize = 23.sp)
             Column(Modifier.weight(1f)) {
-                Text(text.first, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp)
-                Text(text.second, color = Tokens.Muted, fontSize = 14.sp, lineHeight = 19.sp)
+                Text(item.first, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp)
+                Text(item.second, color = Tokens.Muted, fontSize = 14.sp, lineHeight = 19.sp)
             }
         }
     }
-    Text("Start the phones one at a time, a couple of seconds apart, with Bluetooth on.", color = Tokens.Faint, fontSize = 13.sp, lineHeight = 18.sp)
+    Text("Presenting indoors? Open Replay lab on Drive to run the same pipeline on recorded clips. Replay data is kept separate from road observations.", color = Tokens.Faint, fontSize = 13.sp, lineHeight = 18.sp)
 }
 
 /**

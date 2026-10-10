@@ -41,7 +41,7 @@ fun rankLetter(rank: Int): String = if (rank in 0..25) ('A' + rank).toString() e
 data class LogEntry(val utcMs: Long, val monotonicMs: Long, val code: String, val detail: String, val frame: HazardEnvelope? = null)
 data class SessionState(
     val role: Role, val mode: Mode, val running: Boolean = false, val ready: Boolean = false,
-    val status: String = "Choose a role, then start", val lastReceived: HazardEnvelope? = null,
+    val status: String = "Start drive or a replay demo", val lastReceived: HazardEnvelope? = null,
     val lastTx: HazardEnvelope? = null, val alert: MeshEffect.Announce? = null,
     val counters: Map<String, Int> = emptyMap(), val logs: List<LogEntry> = emptyList(), val bounds: MeshBounds = MeshBounds(0, 0, 0),
     val events: List<EventTrace> = emptyList(), val node: NodeId? = null,
@@ -64,7 +64,7 @@ class MeshSession(private val context: Context, val preferences: AppPreferences)
     val state = mutableState.asStateFlow()
     private var scope: CoroutineScope? = null
     private var commands: Channel<Command>? = null
-    private var tx: Channel<Outgoing>? = null
+    private var tx: Outbox? = null
     private var transport: HazardTransport? = null
     private var position: AndroidPositionSource? = null
     private var source: PositionSource? = null
@@ -87,6 +87,48 @@ class MeshSession(private val context: Context, val preferences: AppPreferences)
         data class Control(val frame: ControlFrame, val label: String) : Outgoing
     }
 
+    /** Pending radio work is bounded and ordered by hazard urgency rather than camera frame rate. */
+    private class Outbox(private val profile: MeshProfile) {
+        private val queue = PriorityOutbox<Outgoing>(64)
+        private val wake = Channel<Unit>(Channel.CONFLATED)
+        @Volatile private var closed = false
+        @Synchronized fun offer(request: Outgoing): Boolean {
+            if (closed) return false
+            val now = SystemClock.elapsedRealtime()
+            val priority: PriorityOutbox.Priority
+            val expires: Long
+            val key: String?
+            when (request) {
+                is Outgoing.Hazard -> {
+                    val f = request.effect.frame
+                    val age = generationAgeMs(f.packet.tGenDeci, System.currentTimeMillis()).coerceAtLeast(0)
+                    expires = now + minOf(profile.maxAgeMs, f.packet.validityS * 1_000L) - age
+                    priority = when (f.kind) {
+                        HazardKind.BRAKING, HazardKind.VEHICLE_CLOSE, HazardKind.PEDESTRIAN, HazardKind.ACCIDENT -> PriorityOutbox.Priority.URGENT
+                        else -> if (f.kind?.use == HazardUse.CAUTION) PriorityOutbox.Priority.CONDITION else PriorityOutbox.Priority.CONTEXT
+                    }
+                    key = "event:${f.id}"
+                }
+                is Outgoing.Control -> {
+                    priority = PriorityOutbox.Priority.CONTEXT
+                    expires = now + if (request.frame is ControlFrame.Presence) 1_500 else 2_500
+                    key = if (request.frame is ControlFrame.Presence) "presence" else null
+                }
+            }
+            val admitted = queue.offer(request, priority, now, expires, key)
+            if (admitted) wake.trySend(Unit)
+            return admitted
+        }
+        suspend fun next(): Outgoing? {
+            while (!closed) {
+                queue.poll(SystemClock.elapsedRealtime())?.let { return it }
+                if (wake.receiveCatching().isClosed) return null
+            }
+            return null
+        }
+        @Synchronized fun close() { closed = true; queue.clear(); wake.close() }
+    }
+
     fun select(role: Role) {
         check(!state.value.running) { "Stop the session before changing roles" }
         preferences.role = role; update { it.copy(role = role, lastReceived = null, lastTx = null, alert = null) }
@@ -99,7 +141,7 @@ class MeshSession(private val context: Context, val preferences: AppPreferences)
         check(!state.value.running) { "Stop the session before changing settings" }
         val p = preferences.saveProfile(text); update { it.copy(mode = p.mode) }
     }
-    /** True while this phone's camera (or the dashcam simulation) is watching the road: it then leads the chain. */
+    /** A capability flag. Every road phone can observe, relay and receive concurrently. */
     fun setObserving(on: Boolean) { observing = on }
 
     /** Called only from the foreground service after Android's foreground notification is active. */
@@ -126,8 +168,8 @@ class MeshSession(private val context: Context, val preferences: AppPreferences)
             here = { source.current()?.takeIf { it.valid() } }, rank = { roster.rank })
         val jobScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate).also { scope = it }
         val incoming = Channel<Command>(256).also { commands = it }
-        val outgoing = Channel<Outgoing>(64).also { tx = it }
-        output = HazardOutput(context) { record("output", it) }
+        val outgoing = Outbox(profile).also { tx = it }
+        if (output == null) output = HazardOutput(context) { record("output", it) }
         val ble = BleHazardTransport(context, { message -> record("radio", message) }, { ready, status ->
             update { it.copy(ready = ready, status = status) }
         }).also { transport = it }
@@ -140,6 +182,7 @@ class MeshSession(private val context: Context, val preferences: AppPreferences)
                 launch { while (isActive) { delay(25); incoming.trySend(Command.Tick) } }
                 launch(Dispatchers.Default) { transmitLoop(ble, outgoing, clock, profile) }
                 var lastBeat = 0L
+                var lastContextQuery = Long.MIN_VALUE
                 var beaconWorks = true
                 for (command in incoming) {
                     val now = clock.monotonicMs()
@@ -167,7 +210,9 @@ class MeshSession(private val context: Context, val preferences: AppPreferences)
                                             }
                                             update { it.copy(known = map.all) }
                                         }
-                                        queries.receive(frame, now).forEach { f -> outgoing.trySend(Outgoing.Control(f, if (f is ControlFrame.Reply && f.responder == node) "reply" else "query_relay")) }
+                                        queries.receive(frame, now).forEach { f ->
+                                            if (!outgoing.offer(Outgoing.Control(f, if (f is ControlFrame.Reply && f.responder == node) "reply" else "query_relay"))) count("context_queue_full")
+                                        }
                                     }
                                     emptyList()
                                 }
@@ -175,7 +220,10 @@ class MeshSession(private val context: Context, val preferences: AppPreferences)
                         }
                         is Command.Publish -> engine.publish(command.hazard).also { fx ->
                             fx.filterIsInstance<MeshEffect.Originated>().firstOrNull()?.let { o ->
-                                val at = command.at ?: hazardFix(o.frame)
+                                // Host-speed events are located at the emitting phone. Retain its measured
+                                // uncertainty for context replies; camera-projected depth has unknown error.
+                                val at = command.at ?: if (command.hazard.kind in setOf(HazardKind.BRAKING, HazardKind.SLOWDOWN) &&
+                                    command.hazard.detail?.rangeM == null) o.originFix ?: hazardFix(o.frame) else hazardFix(o.frame)
                                 val utc = clock.utcMs()
                                 val age = generationAgeMs(o.frame.packet.tGenDeci, utc)
                                 if (age >= 0) map.add(command.hazard.kind, at, node, now, command.hazard.detail?.confidence, own = true,
@@ -194,7 +242,7 @@ class MeshSession(private val context: Context, val preferences: AppPreferences)
                             }
                             else {
                                 pictureDone = command.done
-                                outgoing.trySend(Outgoing.Control(queries.ask(here, now), "query"))
+                                outgoing.offer(Outgoing.Control(queries.ask(here, now), "query"))
                                 update { it.copy(asking = true) }; record("road_query", "asked the chain both ways")
                                 emptyList()
                             }
@@ -209,8 +257,22 @@ class MeshSession(private val context: Context, val preferences: AppPreferences)
                                 val members = roster.update(now)
                                 val beat = roster.presence(profile.mode == Mode.STAGE, now)
                                 if (beaconWorks) beaconWorks = runCatching { ble.beacon(ControlCodec.encode(beat)) }.getOrDefault(false)
-                                if (!beaconWorks) outgoing.trySend(Outgoing.Control(beat, "presence"))
+                                if (!beaconWorks) outgoing.offer(Outgoing.Control(beat, "presence"))
                                 update { it.copy(chain = members, known = map.all) }
+                                // Enrich a new short warning automatically; no driver needs to tap Ask Road.
+                                // Only fresh unresolved remote evidence triggers this bounded background exchange.
+                                val unresolved = map.all.any { h -> h.evidence.any { e ->
+                                    !e.own && e.fix?.accuracyM == null && now - e.capturedMs in 0..5_000
+                                } }
+                                if (unresolved && !state.value.asking && roster.fix != null &&
+                                    (lastContextQuery == Long.MIN_VALUE || now - lastContextQuery >= 8_000)) {
+                                    lastContextQuery = now
+                                    val q = queries.ask(roster.fix!!, now, radiusM = 500)
+                                    if (outgoing.offer(Outgoing.Control(q, "auto_context"))) {
+                                        update { it.copy(asking = true) }
+                                        count("auto_context_query")
+                                    }
+                                }
                             }
                             queries.tick(now).forEach { q ->
                                 val here = source.current()?.takeIf { it.valid() } ?: q.fix
@@ -235,7 +297,7 @@ class MeshSession(private val context: Context, val preferences: AppPreferences)
         }
     }
 
-    private suspend fun handle(effects: List<MeshEffect>, engine: MeshEngine, map: RoadMap, node: NodeId, now: Long, outgoing: Channel<Outgoing>, source: PositionSource) {
+    private suspend fun handle(effects: List<MeshEffect>, engine: MeshEngine, map: RoadMap, node: NodeId, now: Long, outgoing: Outbox, source: PositionSource) {
         for (effect in effects) when (effect) {
             is MeshEffect.Originated -> {
                 count("originated"); record("originated", "sourceEvent=${effect.sourceEvent}", effect.frame)
@@ -243,7 +305,7 @@ class MeshSession(private val context: Context, val preferences: AppPreferences)
             }
             is MeshEffect.Transmit -> {
                 record("tx_queued", frameDetail(effect.frame), effect.frame)
-                if (!outgoing.trySend(Outgoing.Hazard(effect)).isSuccess) count("tx_queue_full")
+                if (!outgoing.offer(Outgoing.Hazard(effect))) count("tx_queue_full")
             }
             is MeshEffect.Received -> {
                 count("received"); record("received", frameDetail(effect.frame), effect.frame)
@@ -273,22 +335,24 @@ class MeshSession(private val context: Context, val preferences: AppPreferences)
 
     /** Where a hazard is: the origin's position moved forward by the range its camera measured, along its heading. */
     private fun hazardFix(f: HazardEnvelope): GeoFix {
-        val origin = GeoFix(f.packet.latE7 / 1e7, f.packet.lonE7 / 1e7, null, null, true)
+        val origin = GeoFix(f.packet.latE7 / 1e7, f.packet.lonE7 / 1e7, null, null, f.provenance != Provenance.LIVE)
         val range = f.detail?.rangeM ?: return origin
+        if (f.packet.flags and com.jsons.roadmesh.core.protocol.Flags.NO_HEADING != 0) return origin
         val heading = Math.toRadians(f.packet.headingQ * 360.0 / 256)
         return moved(origin, range * cos(heading), range * sin(heading))
     }
 
-    private suspend fun transmitLoop(ble: HazardTransport, outgoing: Channel<Outgoing>, clock: MeshClock, profile: MeshProfile) {
+    private suspend fun transmitLoop(ble: HazardTransport, outgoing: Outbox, clock: MeshClock, profile: MeshProfile) {
         var failures = 0
-        for (request in outgoing) {
+        while (currentCoroutineContext().isActive) {
+            val request = outgoing.next() ?: break
             try {
                 when (request) {
                     is Outgoing.Hazard -> {
                         val frame = request.effect.frame
                         // Discard a queued burst once its originating hazard has expired.
                         val age = generationAgeMs(frame.packet.tGenDeci, clock.utcMs())
-                        if (age > minOf(profile.maxAgeMs, frame.packet.validityS * 1_000L) || age < -profile.futureToleranceMs) { count("tx_expired"); continue }
+                        if (age >= minOf(profile.maxAgeMs, frame.packet.validityS * 1_000L) || age < -profile.futureToleranceMs) { count("tx_expired"); continue }
                         val events = ble.transmit(HazardEnvelopeCodec.encode(frame), request.effect.relay)
                         count(if (request.effect.relay) "relay_burst" else "origin_burst")
                         record("tx_complete", "${frameDetail(frame)} requestedEvents=$events; remote delivery unknown", frame)
@@ -317,16 +381,27 @@ class MeshSession(private val context: Context, val preferences: AppPreferences)
     /** This node's own inference: the origin's range to the hazard plus this node's distance to the origin. */
     private fun received(f: HazardEnvelope): EventTrace {
         val own = source?.current()?.takeIf { it.valid() }
-        val origin = GeoFix(f.packet.latE7 / 1e7, f.packet.lonE7 / 1e7, null, null, true)
+        val origin = GeoFix(f.packet.latE7 / 1e7, f.packet.lonE7 / 1e7, null, null, f.provenance != Provenance.LIVE)
         val toOrigin = own?.let { distanceM(it, origin) }
         val inference = f.kind?.let { k -> toOrigin?.let { NodeInference.at(k, f.detail, it, own.speedMps) } }
         return EventTrace(f.id, f.kind, f.detail, false, f.forwarder, SystemClock.elapsedRealtime(), toOrigin, inference, hops = f.hop,
             canRelay = f.ttl > 0 && (state.value.mode == Mode.ROAD || state.value.chain.let { c -> c.size > (c.firstOrNull { it.self }?.rank ?: Int.MAX_VALUE) + 1 }), viaRank = f.rank)
     }
 
-    /** Publishes a hazard this phone found. [at] is where the hazard is, when the caller knows better than the camera range. */
+    /** Queues a candidate for engine admission, not a delivery acknowledgement. [at] is an optional hazard position. */
     fun publish(hazard: LocalHazard, at: GeoFix? = null): Boolean {
         if (!state.value.ready) { record("source_rejected", "Start a ready mesh session first"); return false }
+        val fix = here()
+        val mode = activeProfile?.mode ?: state.value.mode
+        val scoped = fix != null && when (mode) {
+            Mode.ROAD -> hazard.provenance == Provenance.LIVE && !fix.synthetic
+            Mode.STAGE -> hazard.provenance in setOf(Provenance.REPLAY, Provenance.DEMO) && fix.synthetic
+        }
+        if (!scoped) { record("source_rejected", "Position unavailable or input does not match session mode"); return false }
+        val now = SystemClock.elapsedRealtime()
+        if (hazard.capturedAtMs?.let { it < 0 || it > now || now - it >= (activeProfile?.maxAgeMs ?: 5_000) } == true) {
+            record("source_rejected", "Camera evidence is stale or from a future timestamp"); return false
+        }
         return commands?.trySend(Command.Publish(hazard, at))?.isSuccess == true
     }
     /** Asks the phones ahead and behind what the road is like; [done] gets the combined picture after about 2.5 s. */
@@ -336,6 +411,12 @@ class MeshSession(private val context: Context, val preferences: AppPreferences)
     fun clearAlert() = update { it.copy(alert = null) }
     /** Speaks a non-alert line through the session's offline voice, if the session is running. */
     fun say(text: String) { output?.say(text); record("copilot_spoken", text) }
+    /** Local perception remains useful before GNSS or Bluetooth are ready. Called on the foreground UI thread. */
+    fun localCaution(text: String) {
+        if (output == null) output = HazardOutput(context) { record("output", it) }
+        output?.localCaution(text)
+        record("local_caution", text)
+    }
     fun fail(message: String) { record("service_error", message); update { it.copy(status = message, ready = false) } }
     fun stop() {
         accepting = false

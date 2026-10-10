@@ -14,6 +14,7 @@ class HazardOutput(context: Context, private val report: (String) -> Unit) {
     private var closed = false
     private var lastOutputMs = -2_000L
     private var pending: Pair<MeshEffect.Announce, Long>? = null
+    private var pendingLocal: Pair<String, Long>? = null
     private lateinit var tts: TextToSpeech
     init {
         tts = TextToSpeech(context) { status ->
@@ -29,6 +30,8 @@ class HazardOutput(context: Context, private val report: (String) -> Unit) {
                     if (ready && android.os.SystemClock.elapsedRealtime() <= expires) speak(effect)
                 }
                 pending = null
+                pendingLocal?.let { (text, expires) -> if (ready && android.os.SystemClock.elapsedRealtime() < expires) tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "local-caution") }
+                pendingLocal = null
             } else report("speech unavailable: $status")
         }
     }
@@ -49,5 +52,15 @@ class HazardOutput(context: Context, private val report: (String) -> Unit) {
         if (!ready || text.isBlank()) return
         tts.speak(text, TextToSpeech.QUEUE_ADD, null, "copilot-${android.os.SystemClock.elapsedRealtime()}")
     }
-    fun close() { closed = true; ready = false; pending = null; tts.stop(); tts.shutdown(); vibrator.cancel() }
+    /** Immediate local sensor caution, even when there is no position or radio delivery. */
+    fun localCaution(text: String) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (closed || text.isBlank() || now - lastOutputMs < 1_500) return
+        lastOutputMs = now
+        vibrator.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 180, 100, 180), -1))
+        if (ready) tts.speak(text.take(240), TextToSpeech.QUEUE_FLUSH, null, "local-$now")
+        else pendingLocal = text.take(240) to (now + 2_000)
+        report("local sensor caution; remote delivery unknown")
+    }
+    fun close() { closed = true; ready = false; pending = null; pendingLocal = null; tts.stop(); tts.shutdown(); vibrator.cancel() }
 }

@@ -33,14 +33,20 @@ enum class HazardKind(val cause: Int, val subCause: Int, val speech: String, val
     companion object { fun from(cause: Int, sub: Int) = entries.find { it.cause == cause && it.subCause == sub } }
 }
 data class GeoFix(val lat: Double, val lon: Double, val heading: Double?, val speedMps: Double?, val synthetic: Boolean,
-                  val accuracyM: Double? = null, val headingAccuracyDeg: Double? = null) {
+                  val accuracyM: Double? = null, val headingAccuracyDeg: Double? = null,
+                  /** Local GNSS sample metadata; not encoded in the presence wire format. */
+                  val sampledAtMs: Long? = null, val speedAccuracyMps: Double? = null) {
     fun valid() = lat.isFinite() && lon.isFinite() && lat in -90.0..90.0 && lon in -180.0..180.0 &&
         (heading == null || heading.isFinite() && heading in 0.0..360.0) &&
         (speedMps == null || speedMps.isFinite() && speedMps in 0.0..100.0) &&
         (accuracyM == null || accuracyM.isFinite() && accuracyM >= 0.0) &&
-        (headingAccuracyDeg == null || headingAccuracyDeg.isFinite() && headingAccuracyDeg in 0.0..180.0)
+        (headingAccuracyDeg == null || headingAccuracyDeg.isFinite() && headingAccuracyDeg in 0.0..180.0) &&
+        (sampledAtMs == null || sampledAtMs >= 0) &&
+        (speedAccuracyMps == null || speedAccuracyMps.isFinite() && speedAccuracyMps >= 0.0)
 }
-data class LocalHazard(val kind: HazardKind, val provenance: Provenance, val sourceEvent: String, val detail: HazardDetail? = null)
+data class LocalHazard(val kind: HazardKind, val provenance: Provenance, val sourceEvent: String, val detail: HazardDetail? = null,
+                       /** Original sensor capture on the local monotonic clock, before inference or queueing. */
+                       val capturedAtMs: Long? = null)
 
 /** What the originating phone is mounted in. Four bits on air. */
 enum class VehicleType(val code: Int, val title: String) {

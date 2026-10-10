@@ -1,43 +1,48 @@
-# RoadMesh swarm prototype jury demonstration
+# RoadMesh automatic perception jury demonstration
 
-Version `0.4.1-swarm-preview`, 10 October 2026. The prototype targets temporary road narrowing and hazards hidden from a following vehicle: a stopped bus, roadworks, or a queue beyond a junction. Nearby participating phones share short-lived observations and produce local cautions. The useful distinction to demonstrate is **awareness beyond one vehicle's view without requiring a sensor installed at that location**.
+Version `0.5.0-autonomous-preview`. RoadMesh turns a mounted phone into an automatic road-sensing node: local YOLO detections become persistent tracks; temporal rules evaluate approach, host braking and traffic slowdown; nearby phones exchange compact events over Bluetooth. Every participating phone can sense, relay and receive. The driver does not spend time reporting incidents.
 
-GPS supplies position. Navigation can supply routes and incident information. RoadMesh adds local observation exchange; its present positioning still depends on GPS. The comparison screen lets navigation and roadside sensing receive the same event, so the demonstration exposes the conditions under which each approach works. Research and competitor references are in the [implementation plan](swarm-implementation-plan.md).
+The pitch is **cooperative perception beyond one camera view**, with explicit evidence and uncertainty. GPS still supplies position and host-motion measurements. Navigation, V2I and vehicle-to-vehicle research are related approaches; the prototype does not establish universal superiority over them.
+
+## What to say
+
+> "We mount a phone with its rear camera facing the road. It detects visible vehicles and obstacles locally, follows them over time and combines that history with available motion measurements. When the evidence supports an event, the phone generates and shares a compact warning automatically. Other participating phones can receive and relay it without waiting for a person to report it. Our prototype exposes why an event was raised, keeps its original age and does not treat missing knowledge as a clear road."
+
+Keep the distinction between relative approach and measured braking: a growing box alone cannot tell us whether the lead vehicle braked or the camera vehicle accelerated. Host braking requires valid host-speed evidence; the slowdown rule also requires persistent vehicle tracks.
+
+## Three minute presentation
+
+1. **Show the intended setup, 20 seconds.** A phone is mounted with its rear camera facing forward. On Drive, show Start drive and explain that each participating phone can observe and relay. No manual reporting is required.
+2. **Use a real recorded clip, 50 seconds.** Open replay lab, select the Bengaluru dashcam or pothole footage and press Start replay demo. Show actual local YOLO detections and track IDs over the video. Keep the REPLAY label visible: these are recorded frames processed now. All three bundled clips and the custom-video picker remain available.
+3. **Inspect an event, 25 seconds.** When the replay evaluator raises an event, show its reason and temporal evidence. Candidate queued means accepted for mesh processing, where it can still be rejected; it is not transmission or receipt. If the chosen clip produces no current event, describe that honestly and use the algorithm fixtures to exercise a known event case; do not manually inject a report while calling it automatic detection.
+4. **Explain the sensor fusion, 35 seconds.** In Lab, choose Corroborated traffic slowdown. The production evaluator processes supplied synthetic boxes and speed measurements. Show the supporting evidence, then choose Unknown speed quality or One-frame detector glitch to demonstrate a withheld event. These fixtures test event logic, not YOLO accuracy.
+5. **Show cooperation, 30 seconds.** Use actual receiver logs if three phones are rehearsed. Alternatively, the labelled stopped-bus network model shows a possible A-to-B-to-C path and the loss of knowledge when the only relay is removed. Do not describe the ideal graph as measured Bluetooth recovery.
+6. **Finish with the experiment, 20 seconds.** "The next evidence is a controlled phone trial measuring detector errors, original event age at reception and useful warning lead time. We have implemented the pipeline; field usefulness remains to be measured."
+
+The [automatic drive guide](AUTOMATED_DRIVE.md) contains live setup, the three-phone Stage procedure, all replay choices and implementation pointers. The retained 3D brake scene is a separate synthetic demonstration.
 
 ## What is implemented
 
 | Feature | Show the jury | Practical reason |
 | --- | --- | --- |
-| Manual road-narrowing report | In Swarm → This phone or Road, publish a condition at the reporting phone's position | Covers a stopped bus or temporary obstruction before automatic perception is reliable |
-| Original source and age | One original event remains one claimed source through multiple copies; old reports expire | Repeated forwarding must not make a rumour look fresh or multiply witnesses |
-| Movement and uncertainty | Same-direction, opposing, crossing and uncertain neighbours have separate classifications | A nearby phone need not be on the same approach; missing geometry stays uncertain |
-| Bounded local processing | Local roster, evidence and assessment inputs have explicit limits | A phone processes its relevant surroundings rather than requiring a city-wide live graph |
-| Swarm lab | Remove a relay, enable an alternative neighbour, change infrastructure coverage and age | Shows why cooperation helps and what a partition removes |
-| Shadow learning replay | Compare predictions before and after new completed observations; show the intervening failure | Makes adaptive estimation inspectable before connecting learning to live advice |
+| Automatic live rear-camera pipeline | Start drive, actual boxes, local track IDs and measured inference rate | Removes the per-incident reporting action |
+| Shared replay pipeline | Bundled footage and custom-video input with REPLAY source | Repeatable visual pitch using the actual local models |
+| Temporal event rules | Track persistence, unique speed samples, uncertainty and decision evidence | A single noisy frame or unknown speed does not prove a braking wave |
+| Overlapping sensing and relaying | Each ROAD phone may originate and forward eligible events | Avoids dependence on a permanently appointed lead observer |
+| Optional local explanation | Gemma explains recorded evidence after the compact warning is queued | Keeps slow text generation outside the urgent event path |
+| Original source and age | Forwarded copies keep the original identity and generation time | Several copies are not several witnesses |
+| Movement and uncertainty | Local direction groups and missing-position states | Nearby phones are not necessarily on the same approach |
+| Bounded processing | Capped tracks, histories, neighbourhood and evidence storage | Keeps the problem local to a phone |
 
-The live phone view and lab use the same core advisory evaluator. The lab supplies synthetic positions and an ideal link graph. Its centrally computed shortest path is an explanation of possible delivery, not a trace from the phone radios. On phones, the existing distributed BLE mesh carries reports; ROAD forwarding no longer depends on a globally ordered chain rank. The local sensing nominee is a suggestion only; distributed task assignment is not implemented.
-
-## Three minute presentation
-
-1. **Introduce the problem, 20 seconds.** “Imagine a bus reducing usable road width ahead. The following driver cannot yet see it. Our question is whether another participating vehicle can provide a recent, relevant warning.”
-2. **Open Swarm → Swarm lab, 40 seconds.** Show observer A, relay B and recipient C. C receives a caution supported by A's observation. E faces the opposite direction and is kept separate from same-direction peers. The drawing is explicitly synthetic.
-3. **Challenge the network, 30 seconds.** Turn Relay B off: knowledge becomes UNKNOWN. Turn Alternative neighbour D on: the computed path becomes A → D → C. Explain that recovery needs an available path; it is not guaranteed by the word “mesh”.
-4. **Make the comparison fair, 30 seconds.** With both relays absent, enable roadside sensor coverage: V2I has a caution while RoadMesh remains unknown. Enable the navigation incident feed and move the age to 8 seconds: navigation also receives the event. The selected delays are experiment inputs, not measured commercial performance.
-5. **Age the evidence, 20 seconds.** Select Expired at 16 seconds. The original event had a 15-second lifetime. Expiry means unknown, not “road clear”; another relay cannot reset its age.
-6. **Show learning, 30 seconds.** Scroll to “Learn from outcomes. Test the errors.” The estimate improves in stable synthetic conditions, fails when congestion changes, then adapts after new observed outcomes. These numbers measure prediction error, not time saved.
-7. **Show This phone, 10 seconds.** This switches to actual local session records. No active session or usable position produces an honest unknown state. The report button uses the current phone position and identifies whether it is stage or road data.
-
-Suggested closing statement: “We have implemented local observation sharing, evidence expiry and a working comparison prototype. We are testing whether this can provide useful warnings around temporary bottlenecks with partial participation. The next proof is measured delivery and warning relevance on real phones.”
+Track IDs are local visual associations, not global vehicle identities. There is no autonomous steering or braking. LLM explanations are checked before display, expire when stale and never gate deterministic warnings. They are not a vehicle-control authority. Signing, authenticated independent sources, distributed task leases and live fleet learning remain future work.
 
 ## Demonstrating actual phone exchange
 
-Install the same preview APK on each device. The control-frame revision carries original IDs, capture times, provenance and position uncertainty; an older client cannot provide equivalent attributed evidence. The APK requires Android 12 or newer and the device capabilities described in the [existing rehearsal runbook](demo-runbook.md).
+Install the same APK on all phones. Use Start replay demo on the first phone, then Stage-mode Start mesh on the forwarding and receiving phones. The stage assigns synthetic positions and filters contacts into an ordered rehearsal chain. Recorded-frame detections and REPLAY event provenance must remain visible; Bluetooth receipt is real only when it appears on the receiver.
 
-First rehearse with three stationary phones in Stage mode using the existing A/B/C assignments. On A, open Swarm → This phone and report narrowing. On C, inspect actual received events and source age; use “Ask nearby phones for their road picture” to exercise the richer query response. Stage positions are synthetic, and the existing adjacency acceptance filter demonstrates a forced A → B → C exchange even when all devices are physically in range. A source-side “queued” or TX completion is not proof of C's receipt. Record the receiver's event ID.
+For live closed-site evaluation, choose Start drive on every mounted phone. Real GNSS replaces synthetic positions. Receiving/relaying and sensing can overlap; a missing position or poor speed estimate remains unknown. Compare the original event ID and generation age across device logs. Repeat with missing contacts and available alternative contacts before claiming recovery.
 
-For a subsequent closed-site ROAD experiment, use real fresh GNSS fixes and the same APK. A passenger or stationary observer reports the narrowing at its actual location. Verify which recipients receive the original ID and whether it is relevant to their approach. At rest, heading can be absent, so an uncertain advisory is expected. ROAD rejects demo/replay evidence; a missing fix is never replaced with stage coordinates. This session built and tested the software but did not perform this hardware experiment.
-
-Measure delivery fraction, original observation age at receipt, duplicate suppression, wrong-approach warnings and unknown-state frequency. Repeat with the middle phone absent, with a genuinely available alternative contact, and with screen-off/background restrictions. Check actual receiver logs before describing recovery or end-to-end latency. Do not infer physical radio range from the lab's configured 50-metre edges.
+Useful measurements include event precision and misses, inference age, delivery fraction, original event age at receipt, duplicate suppression, wrong-approach warnings and battery/thermal behavior. The current software work does not replace that hardware experiment.
 
 ## Inspectable results
 
@@ -73,7 +78,7 @@ The estimator only accepts completed, directly observed episodes, with bounded s
 
 **Why not install V2I?** A covered roadside sensor may have the better view and can work without a chain of participating vehicles. The hypothesis for RoadMesh is deployment flexibility at temporary locations. No lower total-cost or universal coverage claim has been measured.
 
-**Where is the decentralized swarm?** Each phone maintains its own bounded knowledge and exchanges observations over the existing mesh without a laptop coordinator. Classification and advice are local. Distributed task leases, airtime-aware scheduling and cooperative learning remain roadmap items. The simulation's graph is not evidence of real distributed route discovery.
+**Where is the decentralized swarm?** Every ROAD phone can automatically sense with its own camera while maintaining bounded local knowledge and forwarding eligible observations without a laptop coordinator. Event decisions and advice are local. Distributed task leases, airtime-aware scheduling and cooperative learning remain roadmap items. The simulation's graph is not evidence of real distributed route discovery.
 
 **How is the graph optimized?** The implementation bounds the local roster at 128 entries, scopes advisory neighbours to 250 metres by default, expires old information and caps assessment input at 128 participants and 512 observations. It separates movement groups and deduplicates original evidence. These are resource controls and relevance improvements; no CPU, battery or city-scale optimization benchmark has been run. The small lab still constructs edges with pairwise distance checks.
 
@@ -81,13 +86,13 @@ The estimator only accepts completed, directly observed episodes, with bounded s
 
 ## Build and verification
 
-Use JDK 17 and the configured Android SDK. Restore the team's two detector assets with `powershell -File tools/fetch_prototype_models.ps1`; they are checksum-pinned and ignored by Git. The preview bundles those models for the existing replay detector. Live camera hazard generation and the optional separate Gemma import are not added by this change.
+Use JDK 17 and the configured Android SDK. Restore the team's two detector assets with `powershell -File tools/fetch_prototype_models.ps1`; they are checksum-pinned and ignored by Git. The preview uses those models for both live rear-camera input and retained recorded-video input. The optional Gemma model remains a separate import.
 
 ```powershell
 .\gradlew.bat :core:test :sim-core:test :app:testDebugUnitTest :app:assembleDebug :app:lintDebug
 .\gradlew.bat -q :core:swarmReport
 ```
 
-Screenshot tests are opt-in with `-PwithScreenshots=true`. On this machine they used Robolectric API 35 with native graphics and a 400 × 880 dp viewport; rendered outputs are in `app/build/screens/`. The final test counts and artifact checksum are recorded in [HANDOVER.md](HANDOVER.md). Android lint has 18 warnings and no errors; the warnings are not treated as a completed cleanup.
+Screenshot tests are opt-in with `-PwithScreenshots=true`. On this machine they used Robolectric API 35 with native graphics and a 400 × 880 dp viewport; rendered outputs are in `app/build/screens/`. Final verification counts and artifact details belong to the release record; historical 0.4.1 results are recorded in [HANDOVER.md](HANDOVER.md). Re-run the checks for this version before using earlier counts.
 
 The preview is an unsigned-evidence advisory prototype: source IDs are claims, not authenticated independent vehicles. Position uncertainty cannot distinguish all parallel roads or flyovers. Rehearsal and controlled field evidence are the next steps, followed by calibrated mixed-traffic comparisons, message scheduling and live outcome capture.

@@ -95,6 +95,50 @@ class ScreenshotTest {
         shot("4-observe-idle")
     }
 
+    @Test fun driveStartsWithOneActionAndReplayStaysAvailable() {
+        var starts = 0
+        var replayStarts = 0
+        val driveActions = Actions({}, {}, {}, {}, {}, {}, {}, {}, {}, startDrive = { starts++ }, startReplay = { replayStarts++ })
+        // Scroll changes node coordinates. Let layout and click recompositions settle during interaction.
+        compose.mainClock.autoAdvance = true
+        compose.setContent { RoadMeshTheme { Surface(color = Tokens.Ink) {
+            MainTabs(app, SessionState(Role.RELAY, Mode.ROAD), CopilotState(), ObserverState(), emptyList(), driveActions)
+        } } }
+        compose.waitForIdle()
+        compose.onNodeWithText("Start drive").performScrollTo().performClick()
+        org.junit.Assert.assertEquals(1, starts)
+        compose.onNodeWithText("Open replay lab").performScrollTo().performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Hide replay lab").assertExists()
+        com.jsons.roadmesh.perception.DashcamObserver.CLIPS.forEach { (_, label) -> compose.onNodeWithText(label).assertExists() }
+        compose.onNodeWithText("Start replay demo").performScrollTo().performClick()
+        org.junit.Assert.assertEquals(1, replayStarts)
+        compose.mainClock.autoAdvance = false
+        shot("17-drive-replay-choice")
+    }
+
+    @Test fun automaticPipelineShowsLocalOnlyWithoutPosition() {
+        val observer = observed().copy(simulating = false, live = true, frames = 84, capturedAtMs = now,
+            cameraStatus = "Rear camera streaming", analysisStatus = "Rapid closing candidate · sustained track growth")
+        compose.mainClock.autoAdvance = false
+        compose.setContent { RoadMeshTheme { Surface(color = Tokens.Ink) {
+            Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                DrivePipeline(SessionState(Role.RELAY, Mode.ROAD, running = true, ready = true), observer)
+            }
+        } } }
+        compose.onNodeWithText("Local sensing · awaiting real position for sharing").assertExists()
+        shot("18-live-pipeline-position-unknown")
+    }
+
+    @Test fun automatedEventLabUsesComputedFixtures() {
+        compose.setContent { RoadMeshTheme { Surface(color = Tokens.Ink) {
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) { AutomationLab() }
+        } } }
+        compose.onNodeWithText("AUTOMATIC EVENT LAB").assertExists()
+        compose.onNodeWithText("Fixture expectation matched").assertExists()
+        shot("19-automatic-event-lab")
+    }
+
     @Test fun observeSimulating() {
         val frame = BitmapFactory.decodeStream(javaClass.getResourceAsStream("/cv_raman_8s.jpg")).asImageBitmap()
         val o = observed()

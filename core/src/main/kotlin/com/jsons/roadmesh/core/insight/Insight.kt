@@ -30,7 +30,7 @@ data class NodeInference(val kind: HazardKind, val hazardAheadM: Int, val etaS: 
             val action = when (kind) {
                 HazardKind.PEDESTRIAN -> if (soon) "slow down now and be ready to stop" else "ease off and watch for people on the road"
                 HazardKind.BRAKING -> if (soon) "brake gently and open the gap to the car ahead" else "ease off early so you don't have to brake hard"
-                HazardKind.VEHICLE_CLOSE -> if (soon) "hold your lane and leave room, a vehicle cut in ahead" else "expect a sudden lane change ahead"
+                HazardKind.VEHICLE_CLOSE -> "watch the gap ahead; the cause of relative approach is unknown"
                 HazardKind.POTHOLE -> "watch the road surface and prepare to slow smoothly"
                 HazardKind.ACCIDENT -> "prepare to slow; the road may be blocked and people may be nearby"
                 HazardKind.SLOWDOWN -> "prepare for slower traffic ahead; the queue may persist"
