@@ -5,10 +5,12 @@ import kotlin.math.*
 data class NodeId(val value: Long) { override fun toString() = java.lang.Long.toUnsignedString(value, 16) }
 data class MessageId(val origin: NodeId, val session: Long, val sequence: Int)
 enum class Provenance(val wire: Int) { DEMO(1), LIVE(2), REPLAY(3) }
-enum class Role(val title: String, val stageId: Long) { DETECTOR("Detector", 1), RELAY("Relay", 2), OBSERVER("Observer", 3) }
+enum class Role(val title: String, val stageId: Long) { OBSERVER("Observer", 1), RELAY("Relay", 2), RECEIVER("Receiver", 3) }
 enum class Mode { STAGE, ROAD }
 enum class HazardKind(val cause: Int, val subCause: Int, val speech: String) {
-    BRAKING(27, 1, "Caution. Braking ahead.");
+    BRAKING(27, 1, "Caution. Braking ahead."),
+    PEDESTRIAN(12, 0, "Caution. Pedestrian ahead."),
+    VEHICLE_CLOSE(97, 0, "Caution. Vehicle close ahead.");
     companion object { fun from(cause: Int, sub: Int) = entries.find { it.cause == cause && it.subCause == sub } }
 }
 data class GeoFix(val lat: Double, val lon: Double, val heading: Double?, val speedMps: Double?, val synthetic: Boolean) {
@@ -16,7 +18,27 @@ data class GeoFix(val lat: Double, val lon: Double, val heading: Double?, val sp
         (heading == null || heading.isFinite() && heading in 0.0..360.0) &&
         (speedMps == null || speedMps.isFinite() && speedMps in 0.0..100.0)
 }
-data class LocalHazard(val kind: HazardKind, val provenance: Provenance, val sourceEvent: String)
+data class LocalHazard(val kind: HazardKind, val provenance: Provenance, val sourceEvent: String, val detail: HazardDetail? = null)
+
+/** What the originating phone is mounted in. Four bits on air. */
+enum class VehicleType(val code: Int, val title: String) {
+    UNKNOWN(0, "vehicle"), CAR(1, "car"), TWO_WHEELER(2, "two-wheeler"), AUTO(3, "auto-rickshaw"), BUS_TRUCK(4, "bus or truck");
+    companion object { fun from(code: Int) = entries.find { it.code == code } ?: UNKNOWN }
+}
+
+/**
+ * The origin's own inference, carried in the two spare hazard bytes of the core packet: p1 is the distance from the
+ * origin's camera to the hazard in metres (1..255, 0 unknown); p2 holds the origin's vehicle type (high nibble) and
+ * the detector's confidence in tenths (low nibble, 0 unknown). Relays copy it unchanged.
+ */
+data class HazardDetail(val rangeM: Int?, val vehicle: VehicleType, val confidence: Double?) {
+    val p1 get() = rangeM?.coerceIn(1, 255) ?: 0
+    val p2 get() = (vehicle.code shl 4) or (confidence?.let { (it * 10).roundToInt().coerceIn(1, 10) } ?: 0)
+    companion object {
+        fun from(p1: Int, p2: Int): HazardDetail? = if (p1 == 0 && p2 == 0) null
+            else HazardDetail(p1.takeIf { it > 0 }, VehicleType.from(p2 shr 4), (p2 and 15).takeIf { it in 1..10 }?.let { it / 10.0 })
+    }
+}
 
 /** Implementations can be GNSS, explicit demo tracks, or recorded input. No radio dependency. */
 fun interface PositionSource { fun current(): GeoFix? }

@@ -12,8 +12,8 @@ class RoadMeshSceneActivity : SimulatorActivity() {
     private val mesh get() = (application as RoadMeshApplication).session
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (!mesh.state.value.ready || mesh.state.value.role != Role.DETECTOR || mesh.state.value.mode != Mode.STAGE) {
-            Toast.makeText(this, "Start Detector in Stage mode first", Toast.LENGTH_LONG).show(); finish()
+        if (!mesh.state.value.ready || mesh.state.value.role != Role.OBSERVER || mesh.state.value.mode != Mode.STAGE) {
+            Toast.makeText(this, "Start as Observer in Stage mode first", Toast.LENGTH_LONG).show(); finish()
         }
     }
     override fun onSceneEvent(event: SceneEvent) {
