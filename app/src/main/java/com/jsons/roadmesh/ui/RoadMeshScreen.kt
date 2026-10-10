@@ -117,7 +117,7 @@ private fun displayName(context: android.content.Context, uri: Uri) = runCatchin
 }.getOrNull()
 
 enum class Tab(val title: String, val icon: TabIcon) {
-    OBSERVE("Observe", TabIcon.OBSERVE), MESH("Relay", TabIcon.MESH), RECEIVED("Received", TabIcon.RECEIVED), REPORTS("Reports", TabIcon.REPORTS)
+    OBSERVE("Observe", TabIcon.OBSERVE), MESH("Mesh", TabIcon.MESH), RECEIVED("Road", TabIcon.RECEIVED), SWARM("Swarm", TabIcon.RELAY), REPORTS("Reports", TabIcon.REPORTS)
 }
 
 /* ---------- The tabs ---------- */
@@ -132,10 +132,11 @@ enum class Tab(val title: String, val icon: TabIcon) {
     val passed = state.events.count { it.relayedAtMs != null || it.sentAtMs != null }
     // The tab follows the role the chain gives this phone: A observes, the middle relays, the last receives.
     LaunchedEffect(state.liveRole, state.chain.size > 1) {
-        if (state.chain.isNotEmpty()) tab = when (state.liveRole) { Role.OBSERVER -> Tab.OBSERVE; Role.RELAY -> Tab.MESH; Role.RECEIVER -> Tab.RECEIVED }
+        if (state.mode == Mode.STAGE && state.chain.isNotEmpty() && tab != Tab.SWARM && tab != Tab.REPORTS)
+            tab = when (state.liveRole) { Role.OBSERVER -> Tab.OBSERVE; Role.RELAY -> Tab.MESH; Role.RECEIVER -> Tab.RECEIVED }
     }
     // A new warning brings the Received tab forward unless this phone is busy observing.
-    LaunchedEffect(state.events.firstOrNull { !it.originated }?.id) { if (received > 0 && tab != Tab.OBSERVE && state.liveRole == Role.RECEIVER) tab = Tab.RECEIVED }
+    LaunchedEffect(state.events.firstOrNull { !it.originated }?.id) { if (received > 0 && tab == Tab.MESH && state.liveRole == Role.RECEIVER) tab = Tab.RECEIVED }
     Column(Modifier.fillMaxSize()) {
         SignalEdge(when { warned -> Tokens.Yellow; state.ready -> Tokens.Green; else -> Tokens.Red })
         Column(Modifier.weight(1f).safeDrawingPadding()) {
@@ -145,13 +146,14 @@ enum class Tab(val title: String, val icon: TabIcon) {
                     Tab.OBSERVE -> ObserveTab(app, state, copilot, o, questions, actions)
                     Tab.MESH -> MeshTab(state, copilot, now, actions)
                     Tab.RECEIVED -> ReceivedTab(app, state, copilot, questions, now, actions)
+                    Tab.SWARM -> SwarmScreen(state, onAskRoad = { app.askRoad() }, onReportNarrowing = app::reportNarrowing)
                     Tab.REPORTS -> ReportsTab(app, reports)
                 }
             }
             NavigationBar(containerColor = Tokens.Panel, tonalElevation = 0.dp) {
                 Tab.entries.forEach { t ->
                     val selected = t == tab
-                    val count = when (t) { Tab.OBSERVE -> o.raised.size; Tab.MESH -> state.chain.size; Tab.RECEIVED -> received; Tab.REPORTS -> reports.size }
+                    val count = when (t) { Tab.OBSERVE -> o.raised.size; Tab.MESH -> state.chain.size; Tab.RECEIVED -> received; Tab.SWARM -> 0; Tab.REPORTS -> reports.size }
                     NavigationBarItem(selected, { tab = t }, icon = {
                         BadgedBox(badge = { if (count > 0) Badge(containerColor = Tokens.Yellow, contentColor = Tokens.Ink) { Text("$count") } }) {
                             TabGlyph(t.icon, if (selected) Tokens.Ink else Tokens.Muted)
@@ -380,6 +382,7 @@ private fun counts(c: Map<ObjectClass, Int>): String {
     val me = state.me()
     TabColumn {
         when {
+            state.mode == Mode.ROAD -> Heading("Your local road mesh", "Phones keep their own view of nearby traffic. Camera observers and relays can overlap; joining or leaving does not appoint a road controller. Open Swarm to inspect directions and shared evidence.")
             !state.running -> Heading("Mesh is off", "Tap Start mesh. The first phone to start is A, the observer; every phone started after it relays in that order, and the newest one receives.")
             state.liveRole == Role.OBSERVER -> Heading("You are A, the observer", "You started the mesh first. What your camera finds, or a test warning from the Observe tab, goes to ${state.next()} and on down the chain.")
             state.liveRole == Role.RELAY -> Heading("$me relays to ${state.next()}", "Warnings from ${rankLetter(state.rank - 1)} arrive here. This phone works out what they mean from where it is, then passes them to ${state.next()}. Nothing to tap: it is automatic.")
@@ -397,16 +400,16 @@ private fun counts(c: Map<ObjectClass, Int>): String {
         Surface(shape = RoundedCornerShape(24.dp), color = Tokens.Panel, modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("MESH MAP · 3D", fontFamily = Michroma, fontSize = 11.sp, letterSpacing = 1.sp, color = Tokens.Yellow, modifier = Modifier.padding(start = 6.dp, top = 4.dp))
-                if (nodes.isEmpty()) Text("No phones heard yet.", color = Tokens.Faint, fontSize = 14.sp, modifier = Modifier.padding(6.dp))
-                else MeshMap3D(nodes, hazards, active)
-                Text("Drag to rotate, pinch to zoom. Blocks are phones (A leads); arcs are relay links, green while a warning crosses. Markers on the road are hazards this phone knows; ×2 means two phones reported it.",
+                if (nodes.isEmpty()) Text(if (state.chain.isEmpty()) "No phones heard yet." else "${state.chain.size} phones heard; waiting for usable positions.", color = Tokens.Faint, fontSize = 14.sp, modifier = Modifier.padding(6.dp))
+                else MeshMap3D(nodes, hazards, active, unlocatedCount = state.chain.size - nodes.size)
+                Text("Drag to rotate, pinch to zoom. Blocks show reported positions; arcs show inferred ordering, not confirmed radio links. Activity is local receipt or transmission. A missing position stays unlocated.",
                     color = Tokens.Faint, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(horizontal = 6.dp))
             }
         }
-        Text("Chain", style = MaterialTheme.typography.titleMedium)
+        Text(if (state.mode == Mode.STAGE) "Stage chain" else "Nearby participants", style = MaterialTheme.typography.titleMedium)
         if (state.chain.isEmpty()) Text("Waiting for presence beacons…", color = Tokens.Faint, fontSize = 14.sp)
         state.chain.forEach { m -> ChainRow(m, now) }
-        Text("Each phone sends a presence beacon every second. Every phone orders the chain the same way, so they agree without a coordinator; a phone silent for 4 s drops out and the chain closes up.",
+        Text("Each phone sends a presence beacon every second. This is one phone's local view; other phones may hear different peers. A phone silent for 4 s drops out. Road ordering uses this phone's heading, not a fleet-wide agreement.",
             color = Tokens.Faint, fontSize = 12.sp, lineHeight = 17.sp)
         if (state.events.isNotEmpty()) Text("Through this phone", style = MaterialTheme.typography.titleMedium)
         state.events.forEach { e -> EventStepper(e, me, state.next(), copilot.lines["event:${e.id}"], now) }
@@ -483,7 +486,7 @@ private fun detailText(d: HazardDetail?) = d?.let {
                     Text("WARNING FROM $via · ${latest.hops + 1} HOP${if (latest.hops > 0) "S" else ""}", fontFamily = Michroma, fontSize = 11.sp, letterSpacing = 1.sp, color = Tokens.Yellow)
                     Text(latest.kind?.title() ?: "Warning", fontFamily = Saira, fontWeight = FontWeight.ExtraBold, fontSize = 42.sp, lineHeight = 44.sp, color = Tokens.Yellow)
                     latest.inference?.let { Text("About ${it.hazardAheadM} m ahead of you" + (it.etaS?.let { s -> " · ${s.toInt()} s away" } ?: ""), style = Tabular, fontSize = 18.sp, color = Tokens.Paper) }
-                    Text("Seen by the camera at the front (${detailText(latest.detail)})" + if (latest.hops > 0) ", relayed by $via." else ".", fontSize = 14.sp, color = Tokens.Muted, lineHeight = 19.sp)
+                    Text("Reported by a nearby phone (${detailText(latest.detail)})" + if (latest.hops > 0) ", relayed by $via." else ".", fontSize = 14.sp, color = Tokens.Muted, lineHeight = 19.sp)
                     latest.inference?.let { Text("Your move: ${it.action}.", fontSize = 16.sp, fontWeight = FontWeight.SemiBold) }
                     HorizontalDivider(color = Tokens.Line)
                     val line = copilot.lines["event:${latest.id}"]
@@ -498,6 +501,7 @@ private fun detailText(d: HazardDetail?) = d?.let {
         } else Heading("The road ahead", "Ask the phones in front of and behind you what they see. Their answers come back over Bluetooth with no internet and are combined into one picture, with a forecast made on this phone.")
         HowTo(state)
         RoadAhead(app, state, questions.firstOrNull(), copilot, now)
+        ManualNarrowingReport(app, state)
         AskPanel(questions, copilot, app::ask)
         if (state.known.isNotEmpty()) {
             Text("On this phone's road map", style = MaterialTheme.typography.titleMedium)
@@ -589,6 +593,22 @@ private fun detailText(d: HazardDetail?) = d?.let {
     }
 }
 
+@Composable private fun ManualNarrowingReport(app: RoadMeshApplication, state: SessionState) {
+    var result by remember { mutableStateOf("") }
+    Surface(shape = RoundedCornerShape(20.dp), color = Tokens.Panel, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("TEMPORARY ROAD CHANGE", fontFamily = Michroma, fontSize = 11.sp, color = Tokens.Yellow)
+            Text("Stopped bus, parked truck or roadworks reducing the usable road? Report the narrowing at your current position.",
+                color = Tokens.Muted, fontSize = 14.sp, lineHeight = 20.sp)
+            PrimaryButton(if (state.mode == Mode.STAGE) "Stage a road narrowing" else "Report road narrowed here",
+                { result = app.reportNarrowing() }, Modifier.fillMaxWidth(), enabled = state.ready)
+            Text(if (state.mode == Mode.STAGE) "DEMO position · test report over the phone mesh" else "For a stopped vehicle or passenger. This is a manual observation, not a camera detection.",
+                color = Tokens.Faint, fontSize = 12.sp)
+            if (result.isNotEmpty()) Text(result, color = Tokens.Muted, fontSize = 13.sp)
+        }
+    }
+}
+
 /** Test warnings for A, so the relay can be shown without the dashcam video. */
 @Composable private fun TestWarnings(app: RoadMeshApplication, state: SessionState) {
     var last by remember { mutableStateOf("") }
@@ -597,7 +617,7 @@ private fun detailText(d: HazardDetail?) = d?.let {
             Text("SEND A TEST WARNING", fontFamily = Michroma, fontSize = 11.sp, letterSpacing = 1.sp, color = Tokens.Yellow)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf(HazardKind.POTHOLE, HazardKind.ACCIDENT, HazardKind.BRAKING).forEach { k ->
-                    GhostButton(when (k) { HazardKind.ACCIDENT -> "Crash"; HazardKind.BRAKING -> "Braking"; else -> k.title() }, { last = if (app.sendTest(k)) "${k.title()} sent to ${state.next()}." else "Not sent: the mesh is not ready." }, Modifier.weight(1f))
+                    GhostButton(when (k) { HazardKind.ACCIDENT -> "Crash"; HazardKind.BRAKING -> "Braking"; else -> k.title() }, { last = if (app.sendTest(k)) "${k.title()} queued. Remote delivery is not confirmed." else "Not queued: the mesh is not ready." }, Modifier.weight(1f))
                 }
             }
             if (last.isNotEmpty()) Text(last, color = Tokens.Muted, fontSize = 13.sp)

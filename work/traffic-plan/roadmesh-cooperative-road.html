@@ -1,0 +1,184 @@
+<div id="rm-cooperative-road">
+  <h2>The road warns the next driver</h2>
+  <div class="text-small text-muted">Proposed behavior · schematic scene · no measured performance</div>
+  <div class="viz-controls">
+    <label class="form-label">Scenario
+      <select class="form-select" data-scenario>
+        <option value="wave">A developing traffic wave</option>
+        <option value="surface">A shared rough-road memory</option>
+        <option value="junction">A queue beyond the junction</option>
+      </select>
+    </label>
+    <label class="form-check">
+      <input class="form-check-input" data-relay type="checkbox" checked>
+      <span class="form-check-label">Pedestrian relay participates</span>
+    </label>
+  </div>
+  <div class="rm-moment">
+    <label class="form-label" for="rm-story-moment">Story moment: <span data-moment-label>Relevant caution</span></label>
+    <input id="rm-story-moment" class="form-range" data-moment type="range" min="0" max="3" step="1" value="3">
+  </div>
+  <div class="rm-steps text-small" aria-hidden="true">
+    <span data-step="0">■ Observe</span><span data-step="1">◆ Estimate</span><span data-step="2">↝ Relay</span><span data-step="3">▲ Advise</span>
+  </div>
+  <svg class="rm-road" role="img" aria-labelledby="rm-road-title rm-road-desc">
+    <title id="rm-road-title">Road movement and radio contacts are different graphs</title>
+    <desc id="rm-road-desc">A observes a developing road problem. B is a pedestrian relay outside the vehicle flow. C receives a relevant caution if the conceptual relay path is available. Scene positions and evidence are illustrative.</desc>
+  </svg>
+  <div class="rm-detail" data-detail aria-live="polite"></div>
+  <div class="rm-legend text-small">
+    <span><b class="rm-observed">■</b> Observation</span>
+    <span><b class="rm-estimated">◆</b> Inference</span>
+    <span><b class="rm-advised">▲</b> Advisory</span>
+    <span>– – Radio contact</span>
+  </div>
+</div>
+<style>
+  #rm-cooperative-road { width:100%; color:var(--foreground); }
+  #rm-cooperative-road h2 { padding-inline-end:92px; }
+  #rm-cooperative-road .rm-moment { margin-top:18px; }
+  #rm-cooperative-road .rm-steps { display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; margin-top:4px; }
+  #rm-cooperative-road .rm-steps span { color:var(--muted-foreground); }
+  #rm-cooperative-road .rm-steps span[data-current="true"] { color:var(--foreground); font-weight:500; }
+  #rm-cooperative-road .rm-road { display:block; width:100%; height:330px; overflow:visible; }
+  #rm-cooperative-road .rm-road text { fill:var(--foreground); font-family:inherit; font-weight:400; }
+  #rm-cooperative-road .rm-road .rm-secondary { fill:var(--muted-foreground); }
+  #rm-cooperative-road .rm-legend { display:flex; flex-wrap:wrap; gap:10px 20px; margin-top:12px; }
+  #rm-cooperative-road .rm-legend b { font-weight:500; }
+  #rm-cooperative-road .rm-observed { color:var(--viz-series-1); }
+  #rm-cooperative-road .rm-estimated { color:var(--viz-series-2); }
+  #rm-cooperative-road .rm-advised { color:var(--viz-series-3); }
+  #rm-cooperative-road .rm-detail { min-height:2em; }
+  #rm-cooperative-road .rm-moving { transition:opacity 180ms ease,transform 180ms ease; }
+  @media (prefers-reduced-motion:reduce) { #rm-cooperative-road .rm-moving { transition:none; } }
+</style>
+<script>
+(() => {
+  const root = document.getElementById('rm-cooperative-road');
+  const svg = root.querySelector('.rm-road');
+  const scenarioInput = root.querySelector('[data-scenario]');
+  const relayInput = root.querySelector('[data-relay]');
+  const momentInput = root.querySelector('[data-moment]');
+  const momentLabel = root.querySelector('[data-moment-label]');
+  const detail = root.querySelector('[data-detail]');
+  const ns = 'http://www.w3.org/2000/svg';
+  const scenarios = {
+    wave: { name:'Traffic wave', region:'Slowdown front', caution:'Slow traffic ahead. Prepare to slow smoothly.', observed:'Scripted slowdown observations', estimated:'A backward-moving front is estimated' },
+    surface: { name:'Rough-road memory', region:'Rough-road region', caution:'Rough road reported ahead.', observed:'Scripted impact candidate', estimated:'Qualified passes support a surface candidate' },
+    junction: { name:'Junction queue', region:'Queue evidence', caution:'Queue beyond the junction. Keep the junction clear.', observed:'Scripted stopped-vehicle observations', estimated:'Receiving-space risk is estimated' }
+  };
+  const moments = ['Observation', 'Inference with uncertainty', 'Message at relay', 'Relevant caution'];
+  let state = {scenario:'wave', relay:true, moment:3};
+
+  function restore(snapshot) {
+    const saved = snapshot && (snapshot.privateContent || snapshot.modelContent);
+    if (!saved || saved.version !== 1) return;
+    if (Object.prototype.hasOwnProperty.call(scenarios, saved.scenario)) state.scenario = saved.scenario;
+    if (typeof saved.relay === 'boolean') state.relay = saved.relay;
+    if (Number.isInteger(saved.moment) && saved.moment >= 0 && saved.moment <= 3) state.moment = saved.moment;
+  }
+  restore(window.openai && window.openai.widgetState);
+
+  function el(name, attrs, text) {
+    const node = document.createElementNS(ns, name);
+    for (const [key,value] of Object.entries(attrs || {})) node.setAttribute(key,String(value));
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+  function draw() {
+    scenarioInput.value = state.scenario;
+    relayInput.checked = state.relay;
+    momentInput.value = String(state.moment);
+    momentLabel.textContent = moments[state.moment];
+    momentInput.setAttribute('aria-valuetext', moments[state.moment]);
+    root.querySelectorAll('[data-step]').forEach(n => n.dataset.current = String(Number(n.dataset.step) === state.moment));
+    svg.querySelectorAll('[data-scene]').forEach(n => n.remove());
+    const w = Math.max(280,Math.round(svg.getBoundingClientRect().width));
+    svg.setAttribute('viewBox',`0 0 ${w} 330`);
+    const g = el('g',{'data-scene':''}); svg.appendChild(g);
+    const add = (name,attrs,text) => { const n=el(name,attrs,text);g.appendChild(n);return n; };
+    const cX = 38, aX = w-38, bX = w/2, roadY=108, bY=253;
+    const inferred = state.moment >= 1;
+    const received = state.moment >= 3 && state.relay;
+    const colour = {obs:'var(--viz-series-1)', est:'var(--viz-series-2)', adv:'var(--viz-series-3)', neutral:'var(--muted-foreground)', bg:'var(--background)', road:'var(--muted)', border:'var(--border)'};
+
+    add('text',{x:16,y:24,class:'rm-secondary'},'Road movement →');
+    add('rect',{x:12,y:roadY-22,width:w-24,height:44,fill:colour.road});
+    add('line',{x1:12,y1:roadY-22,x2:w-12,y2:roadY-22,stroke:colour.border,'stroke-width':1});
+    add('line',{x1:12,y1:roadY+22,x2:w-12,y2:roadY+22,stroke:colour.border,'stroke-width':1});
+
+    const frontX = Math.round(w*0.65);
+    if (state.scenario === 'junction') {
+      add('rect',{x:frontX-16,y:46,width:32,height:126,fill:colour.road});
+      add('rect',{x:frontX-16,y:roadY-22,width:32,height:44,fill:'none',stroke:colour.neutral,'stroke-width':1});
+      for (let i=0;i<3;i++) add('rect',{x:frontX+23+i*Math.max(12,(aX-frontX-38)/3),y:roadY-6,width:9,height:12,fill:colour.obs,opacity:0.75});
+      if (inferred) add('rect',{x:frontX-19,y:roadY-25,width:38,height:50,fill:colour.est,opacity:0.16});
+      add('text',{x:frontX,y:194,'text-anchor':'middle'},inferred?'Exit space uncertain':'Observe the exit');
+    } else if (state.scenario === 'surface') {
+      add('ellipse',{cx:frontX,cy:roadY,rx:Math.min(31,w*0.08),ry:17,fill:colour.est,opacity:inferred?0.2:0.08});
+      add('rect',{x:frontX-4,y:roadY-4,width:8,height:8,fill:colour.obs});
+      if (inferred) {
+        add('rect',{x:frontX-17,y:roadY-5,width:7,height:7,fill:colour.obs});
+        add('rect',{x:frontX+11,y:roadY-1,width:7,height:7,fill:colour.obs});
+      }
+      add('text',{x:frontX,y:194,'text-anchor':'middle'},inferred?'Memory + uncertainty':'First impact candidate');
+    } else {
+      for(let i=0;i<(inferred?3:1);i++) add('rect',{x:frontX-i*22,y:roadY-5,width:9,height:9,fill:colour.obs});
+      if(inferred) {
+        add('rect',{x:frontX-14,y:roadY-30,width:28,height:60,fill:colour.est,opacity:0.18});
+        add('line',{x1:frontX,y1:165,x2:frontX-56,y2:165,stroke:colour.est,'stroke-width':2});
+        add('path',{d:`M ${frontX-49} 160 L ${frontX-56} 165 L ${frontX-49} 170`,fill:'none',stroke:colour.est,'stroke-width':2});
+      }
+      add('text',{x:frontX-16,y:194,'text-anchor':'middle'},inferred?'Wave travels backward':'One slowdown observed');
+    }
+
+    const drawContact = (x1,y1,x2,y2,active) => {
+      add('line',{x1,y1,x2,y2,stroke:active?colour.obs:colour.border,'stroke-width':active?2:1,'stroke-dasharray':'5 6',opacity:state.relay?1:0.5});
+      if (active) {
+        const mx=x1+(x2-x1)*0.62,my=y1+(y2-y1)*0.62;
+        add('circle',{cx:mx,cy:my,r:4,fill:colour.obs});
+      }
+    };
+    drawContact(aX,roadY+17,bX+16,bY-9,state.relay&&state.moment>=2);
+    drawContact(bX-16,bY-9,cX,roadY+17,received);
+
+    function device(x,y,letter,active,series) {
+      add('circle',{cx:x,cy:y,r:17,fill:colour.bg,stroke:active?series:colour.neutral,'stroke-width':active?2:1});
+      add('text',{x,y:y+5,'text-anchor':'middle'},letter);
+    }
+    device(aX,roadY,'A',true,colour.obs);
+    device(bX,bY,'B',state.relay&&state.moment>=2,colour.obs);
+    device(cX,roadY,'C',received,colour.adv);
+    add('text',{x:16,y:65},'C · Approaches');
+    add('text',{x:w-16,y:65,'text-anchor':'end'},'A · Observes');
+    add('text',{x:bX,y:290,'text-anchor':'middle'},state.relay?'B · Pedestrian relay':'B · Not participating');
+    add('text',{x:bX,y:312,'text-anchor':'middle',class:'rm-secondary'},'Walking speed excluded');
+
+    if(received) add('path',{d:`M ${cX} ${roadY-43} L ${cX-6} ${roadY-33} L ${cX+6} ${roadY-33} Z`,fill:colour.adv});
+    if(inferred) add('path',{d:`M ${frontX} ${roadY-37} l 5 5 l -5 5 l -5 -5 Z`,fill:colour.est});
+    const s = scenarios[state.scenario];
+    if(state.moment===0) detail.textContent = `A: ${s.observed}.`;
+    else if(state.moment===1) detail.textContent = `${s.estimated}; this is a proposal to test.`;
+    else if(!state.relay) detail.textContent = 'C: No new warning through this conceptual path; delivery is unknown.';
+    else if(state.moment===2) detail.textContent = 'B carries the original evidence. Forwarding adds no corroboration.';
+    else detail.textContent = `C: “${s.caution}”`;
+    svg.querySelector('#rm-road-desc').textContent = `${s.name}. Moment: ${moments[state.moment]}. ${detail.textContent} Road movement is separate from the conceptual radio contacts. All positions and outcomes are illustrative.`;
+  }
+  function save() {
+    const value={version:1,...state};
+    if(window.openai && typeof window.openai.setWidgetState==='function') {
+      Promise.resolve(window.openai.setWidgetState({modelContent:value,privateContent:value})).catch(()=>{});
+    }
+  }
+  scenarioInput.addEventListener('change',()=>{state.scenario=scenarioInput.value;draw();save();});
+  relayInput.addEventListener('change',()=>{state.relay=relayInput.checked;draw();save();});
+  momentInput.addEventListener('input',()=>{state.moment=Number(momentInput.value);draw();});
+  momentInput.addEventListener('change',save);
+  window.addEventListener('openai:set_globals',event=>{
+    const globals=event.detail && event.detail.globals;
+    if(globals && globals.widgetState){restore(globals.widgetState);draw();}
+  });
+  new ResizeObserver(draw).observe(svg);
+  draw();
+})();
+</script>

@@ -4,6 +4,7 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -28,29 +29,30 @@ import com.jsons.roadmesh.core.road.KnownHazard
 import com.jsons.roadmesh.service.rankLetter
 import kotlin.math.*
 
-/** A phone placed on the 3D road: [z] metres along the road from the front of the chain (negative is behind). */
+/** A phone placed on the 3D road: [z] metres from the first located phone (negative is behind the display heading). */
 data class MapNode(val rank: Int, val role: Role, val self: Boolean, val z: Double, val x: Double, val vehicle: VehicleType)
 /** A hazard placed on the road, same frame as [MapNode]. */
 data class MapHazard(val kind: HazardKind, val z: Double, val x: Double, val reporters: Int)
 
 /**
  * Lays the chain and the road map out along the road. With real positions (road mode) everything is placed by its
- * distance along the mean heading from the front phone; on the stage (synthetic positions) phones are 100 m apart by
- * chain position, as the stage position source places them.
+ * distance along the mean heading from the first located phone. Missing positions are never invented from rank.
+ * Stage positions, when present, come explicitly from the synthetic stage position source.
  */
 fun layoutMesh(chain: List<Member>, known: List<KnownHazard>): Pair<List<MapNode>, List<MapHazard>> {
-    val lead = chain.firstOrNull()?.fix
-    val heading = chain.mapNotNull { it.fix?.heading }.let { if (it.isEmpty()) 0.0 else meanHeading(it) }
+    val lead = chain.firstNotNullOfOrNull { it.fix?.takeIf(GeoFix::valid) }
+    // Opposing traffic must not rotate the reference frame by averaging its heading with the anchor.
+    val heading = lead?.heading ?: 0.0
     fun place(f: GeoFix?): Pair<Double, Double>? {
-        if (lead == null || f == null) return null
+        if (lead == null || f == null || !f.valid()) return null
         val along = alongM(lead, f, heading)
         val d = distanceM(lead, f)
         val side = if (d < 0.5) 0.0 else d * sin(Math.toRadians(bearing(lead, f) - heading))
         return along to side.coerceIn(-6.0, 6.0)
     }
-    val nodes = chain.map { m ->
-        val (z, x) = place(m.fix) ?: (-m.rank * 100.0 to 0.0)
-        MapNode(m.rank, m.role, m.self, z, x.coerceIn(-3.5, 3.5).let { if (abs(it) < 0.5) -1.75 else it }, m.vehicle)
+    val nodes = chain.mapNotNull { m ->
+        val (z, x) = place(m.fix) ?: return@mapNotNull null
+        MapNode(m.rank, m.role, m.self, z, x.coerceIn(-3.5, 3.5), m.vehicle)
     }
     val hazards = known.mapNotNull { h -> place(h.fix)?.let { (z, x) -> MapHazard(h.kind, z, x.coerceIn(-3.5, 3.5), h.reporters.size) } }
     return nodes to hazards
@@ -90,10 +92,10 @@ private fun hazardColour(kind: HazardKind) = when {
 
 /**
  * The mesh in 3D: a two-lane road (traffic keeps left), every phone as a vehicle block with its chain letter and role,
- * relay links as arcs between neighbours in the chain (a pulse runs along a link while a warning crosses it), and the
+ * inferred chain adjacency as arcs (local activity is highlighted; remote delivery is not established), and the
  * hazards this phone knows sitting on the road. Drag to orbit, pinch to zoom.
  */
-@Composable fun MeshMap3D(allNodes: List<MapNode>, allHazards: List<MapHazard>, activeLinks: Set<Int>, modifier: Modifier = Modifier, height: Dp = 340.dp) {
+@Composable fun MeshMap3D(allNodes: List<MapNode>, allHazards: List<MapHazard>, activeLinks: Set<Int>, modifier: Modifier = Modifier, height: Dp = 340.dp, unlocatedCount: Int = 0) {
     val measurer = rememberTextMeasurer()
     // The road is drawn shortened along its length (ALONG display units per metre) so a 400 m chain still fits on a
     // phone with a readable road width; distance labels stay in real metres.
@@ -108,11 +110,15 @@ private fun hazardColour(kind: HazardKind) = when {
     val front = (zs.maxOrNull() ?: 0.0) + 30; val back = (zs.minOrNull() ?: 0.0) - 30
     val span = (front - back).coerceAtLeast(80.0)
     val target = V3(0.0, 0.0, (front + back) / 2)
-    Canvas(modifier.fillMaxWidth().height(height)
+    Column(modifier) {
+    Text("Relative positions · arcs show inferred neighbours", color = Tokens.Muted, fontFamily = Saira, fontSize = 12.sp)
+    Text("Local activity is not remote delivery confirmation. Lateral spacing is illustrative.", color = Tokens.Faint, fontFamily = Saira, fontSize = 11.sp)
+    if (unlocatedCount > 0) Text("$unlocatedCount phone${if (unlocatedCount == 1) "" else "s"} unlocated · no position drawn", color = Tokens.Yellow, fontFamily = Saira, fontSize = 12.sp)
+    Canvas(Modifier.fillMaxWidth().height(height)
         .pointerInput(Unit) { detectTransformGestures { _, pan, z, _ ->
             yaw += pan.x / 300.0; pitch = (pitch + pan.y / 400.0).coerceIn(0.12, 1.45); zoom = (zoom / z).coerceIn(0.35, 2.5)
         } }
-        .semantics { contentDescription = "3D map of ${nodes.size} phones in the mesh and ${hazards.size} hazards on the road. Drag to rotate." }) {
+        .semantics { contentDescription = "Relative map of ${nodes.size} located phones and ${hazards.size} hazards. $unlocatedCount unlocated phones are omitted. Arcs show inferred neighbours, not confirmed delivery. Drag to rotate." }) {
         val cam = Camera(yaw, pitch, span * 0.95 * zoom, target, size.width, size.height)
         fun p(x: Double, y: Double, z: Double) = cam.project(V3(x, y, z))?.first
         fun poly(pts: List<Offset?>, color: Color, stroke: Float? = null) {
@@ -131,11 +137,11 @@ private fun hazardColour(kind: HazardKind) = when {
             for (edge in listOf(-ROAD, ROAD)) p(edge, 0.0, z)?.let { a -> p(edge, 0.0, z2)?.let { b -> drawLine(Tokens.Paper.copy(alpha = 0.8f), a, b, strokeWidth = 2.5f) } }
             z = z2
         }
-        // Distance ticks every 100 m from the front phone.
+        // Distance ticks every 100 m from the first located phone.
         val label = TextStyle(fontFamily = Saira, fontSize = 10.sp, color = Tokens.Faint)
         var tick = 0.0
         while (tick * ALONG >= back) {
-            p(ROAD + 1.5, 0.0, tick * ALONG)?.let { drawText(measurer.measure(if (tick == 0.0) "front" else "${(-tick).toInt()} m", label), topLeft = it) }
+            p(ROAD + 1.5, 0.0, tick * ALONG)?.let { drawText(measurer.measure(if (tick == 0.0) "anchor" else "${(-tick).toInt()} m", label), topLeft = it) }
             tick -= 100.0
         }
         // Hazards on the road.
@@ -151,9 +157,9 @@ private fun hazardColour(kind: HazardKind) = when {
                 drawText(t, topLeft = top - Offset(t.size.width / 2f, t.size.height.toFloat()))
             }
         }
-        // Relay links: arcs from each phone to the one behind it.
+        // Inferred adjacency only. A missing location must not invent a shortcut across an unknown neighbour.
         val ordered = nodes.sortedBy { it.rank }
-        ordered.zipWithNext().forEach { (a, b) ->
+        ordered.zipWithNext().filter { (a, b) -> b.rank == a.rank + 1 }.forEach { (a, b) ->
             val lit = b.rank in activeLinks
             val pts = (0..24).map { i -> val t = i / 24.0; p((a.x + (b.x - a.x) * t) * ROAD / 3.6, 4.5 + sin(PI * t) * (abs(a.z - b.z) * 0.3).coerceIn(4.0, 14.0), a.z + (b.z - a.z) * t) }
             if (pts.none { it == null }) {
@@ -167,6 +173,7 @@ private fun hazardColour(kind: HazardKind) = when {
         }
         // Vehicles, far first.
         nodes.sortedByDescending { n -> cam.project(V3(n.x, 0.0, n.z))?.second ?: 0.0 }.forEach { n -> vehicle(n, cam, measurer) }
+    }
     }
 }
 

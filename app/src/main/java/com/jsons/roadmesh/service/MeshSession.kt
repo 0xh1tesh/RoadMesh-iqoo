@@ -120,7 +120,7 @@ class MeshSession(private val context: Context, val preferences: AppPreferences)
         this.source = source
         val engine = MeshEngine(node, alias, sessionNonce, profile, clock, source,
             if (profile.mode == Mode.STAGE) ChainLinks { roster.rank } else OpenLinks, announce = true,
-            rank = { roster.rank.coerceAtMost(254) }, relayGate = { roster.hasBehind })
+            rank = { roster.rank.coerceAtMost(254) }, relayGate = { profile.mode == Mode.ROAD || roster.hasBehind })
         val map = RoadMap()
         val queries = RoadQueries(node, sessionNonce, ttl = profile.initialTtl.coerceAtLeast(1), records = { from, now, r -> map.records(from, now, r) },
             here = { source.current()?.takeIf { it.valid() } }, rank = { roster.rank })
@@ -131,7 +131,6 @@ class MeshSession(private val context: Context, val preferences: AppPreferences)
         val ble = BleHazardTransport(context, { message -> record("radio", message) }, { ready, status ->
             update { it.copy(ready = ready, status = status) }
         }).also { transport = it }
-        val ownRefresh = HashMap<KnownHazard, Long>()
         jobScope.launch(Dispatchers.Default.limitedParallelism(1)) {
             try {
                 ble.start { bytes ->
@@ -151,7 +150,25 @@ class MeshSession(private val context: Context, val preferences: AppPreferences)
                                 if (frame == null) { count("control_rejected"); emptyList() }
                                 else {
                                     if (frame is ControlFrame.Presence) { roster.hear(frame, now); count("presence_heard") }
-                                    else queries.receive(frame, now).forEach { f -> outgoing.trySend(Outgoing.Control(f, if (f is ControlFrame.Reply && f.responder == node) "reply" else "query_relay")) }
+                                    else {
+                                        if (frame is ControlFrame.Reply) {
+                                            val utc = clock.utcMs()
+                                            for (r in frame.records) {
+                                                val id = r.observationId ?: continue
+                                                val capturedUtc = r.capturedUtcMs ?: continue
+                                                val provenance = r.provenance ?: continue
+                                                if (capturedUtc < 0 || capturedUtc > utc || profile.mode == Mode.ROAD && provenance != Provenance.LIVE) {
+                                                    count("evidence_scope_rejected"); continue
+                                                }
+                                                val age = maxOf(utc - capturedUtc, r.ageS * 1000L)
+                                                val at = moved(frame.fix, r.northM.toDouble(), r.eastM.toDouble()).copy(accuracyM = r.accuracyM)
+                                                map.add(r.kind, at, id.origin, now, r.confidence, own = false, note = "Shared road-query observation",
+                                                    observationId = id, capturedMs = now - age, capturedUtcMs = capturedUtc, provenance = provenance)
+                                            }
+                                            update { it.copy(known = map.all) }
+                                        }
+                                        queries.receive(frame, now).forEach { f -> outgoing.trySend(Outgoing.Control(f, if (f is ControlFrame.Reply && f.responder == node) "reply" else "query_relay")) }
+                                    }
                                     emptyList()
                                 }
                             } else engine.receive(command.bytes)
@@ -159,13 +176,22 @@ class MeshSession(private val context: Context, val preferences: AppPreferences)
                         is Command.Publish -> engine.publish(command.hazard).also { fx ->
                             fx.filterIsInstance<MeshEffect.Originated>().firstOrNull()?.let { o ->
                                 val at = command.at ?: hazardFix(o.frame)
-                                val known = map.add(command.hazard.kind, at, node, now, command.hazard.detail?.confidence, own = true, note = command.hazard.sourceEvent)
-                                ownRefresh[known] = now
+                                val utc = clock.utcMs()
+                                val age = generationAgeMs(o.frame.packet.tGenDeci, utc)
+                                if (age >= 0) map.add(command.hazard.kind, at, node, now, command.hazard.detail?.confidence, own = true,
+                                    note = command.hazard.sourceEvent, observationId = o.frame.id, capturedMs = now - age,
+                                    capturedUtcMs = utc - age, provenance = o.frame.provenance)
                             }
                         }
                         is Command.Ask -> {
                             val here = source.current()?.takeIf { it.valid() }
-                            if (here == null) { command.done(RoadPicture.combine(stageFix(0), map.all, emptyList(), now)); emptyList() }
+                            if (here == null) {
+                                val picture = RoadPicture.unknown()
+                                update { it.copy(picture = picture, pictureAtMs = now, asking = false) }
+                                withContext(Dispatchers.Main) { command.done(picture) }
+                                record("road_query_unavailable", "Position unavailable; no synthetic road position substituted")
+                                emptyList()
+                            }
                             else {
                                 pictureDone = command.done
                                 outgoing.trySend(Outgoing.Control(queries.ask(here, now), "query"))
@@ -185,11 +211,11 @@ class MeshSession(private val context: Context, val preferences: AppPreferences)
                                 if (beaconWorks) beaconWorks = runCatching { ble.beacon(ControlCodec.encode(beat)) }.getOrDefault(false)
                                 if (!beaconWorks) outgoing.trySend(Outgoing.Control(beat, "presence"))
                                 update { it.copy(chain = members, known = map.all) }
-                                refresh(engine, map, ownRefresh, members.size, now, source)?.let { fx -> handle(fx, engine, map, node, now, outgoing, source) }
                             }
                             queries.tick(now).forEach { q ->
                                 val here = source.current()?.takeIf { it.valid() } ?: q.fix
-                                val picture = RoadPicture.combine(here, map.all, q.replies, now)
+                                val replies = if (profile.mode == Mode.ROAD) q.replies.map { r -> r.copy(records = r.records.filter { it.provenance == Provenance.LIVE }) } else q.replies
+                                val picture = RoadPicture.combine(here, map.all, replies, now, clock.utcMs())
                                 update { it.copy(picture = picture, pictureAtMs = now, asking = false) }
                                 record("road_picture", "${q.replies.size} replies; ${picture.items.size} hazards")
                                 pictureDone?.let { cb -> withContext(Dispatchers.Main) { cb(picture) } }; pictureDone = null
@@ -224,7 +250,11 @@ class MeshSession(private val context: Context, val preferences: AppPreferences)
                 val kind = effect.frame.kind
                 val at = hazardFix(effect.frame)
                 val repeat = kind != null && !map.fresh(kind, at, now, 60_000)
-                if (kind != null) map.add(kind, at, effect.frame.id.origin, now, effect.frame.detail?.confidence, own = false)
+                val utc = System.currentTimeMillis()
+                val age = generationAgeMs(effect.frame.packet.tGenDeci, utc)
+                if (kind != null && age >= 0) map.add(kind, at, effect.frame.id.origin, now, effect.frame.detail?.confidence, own = false,
+                    observationId = effect.frame.id, capturedMs = now - age, capturedUtcMs = utc - age, provenance = effect.frame.provenance)
+                else if (age < 0) count("evidence_future_rejected")
                 update { it.copy(lastReceived = effect.frame, known = map.all) }
                 if (!repeat) trace(received(effect.frame))
                 else count("repeat_report")
@@ -234,30 +264,11 @@ class MeshSession(private val context: Context, val preferences: AppPreferences)
                 val fresh = state.value.events.any { it.id == effect.frame.id }
                 count("caution"); record("caution", frameDetail(effect.frame), effect.frame)
                 update { s -> s.copy(alert = effect, events = s.events.map { if (it.id == effect.frame.id) it.copy(announced = true) else it }) }
-                // A refreshed pothole the driver already heard about stays on screen but is not spoken again.
+                // Repeated nearby reports remain visible without repeatedly speaking the same long-lived condition.
                 if (fresh || kind.lifetimeS < 600) withContext(Dispatchers.Main.immediate) { output?.announce(effect) }
             }
             is MeshEffect.Notice -> { count(effect.code); if (effect.code != "duplicate" && effect.code != "link_filtered") record(effect.code, effect.detail) }
         }
-    }
-
-    /**
-     * Keeps long-lived reports alive on the road: every 20 s, while someone else is in the mesh, this phone re-sends up to
-     * three of its own potholes and accidents it is still near (a moved phone cannot place an old hazard on air).
-     */
-    private fun refresh(engine: MeshEngine, map: RoadMap, sent: HashMap<KnownHazard, Long>, members: Int, now: Long, source: PositionSource): List<MeshEffect>? {
-        if (members < 2) return null
-        val here = source.current()?.takeIf { it.valid() } ?: return null
-        val due = map.all.filter { it.own && it.kind.lifetimeS >= 600 && distanceM(here, it.fix) < 250 }
-            .filter { k -> sent.entries.firstOrNull { (h, _) -> h.kind == k.kind && distanceM(h.fix, k.fix) < 25 }?.let { now - it.value >= 20_000 } ?: true }
-            .take(3)
-        if (due.isEmpty()) return null
-        return due.flatMap { k ->
-            sent.keys.removeAll { it.kind == k.kind && distanceM(it.fix, k.fix) < 25 }; sent[k] = now
-            val range = distanceM(here, k.fix).toInt().takeIf { it > 0 }
-            engine.publish(LocalHazard(k.kind, if (state.value.mode == Mode.STAGE) Provenance.REPLAY else Provenance.LIVE, "refresh: ${k.note}".take(120),
-                HazardDetail(range, preferences.vehicle, k.confidence)))
-        }.also { record("refresh", "${due.size} long-lived reports re-sent") }
     }
 
     /** Where a hazard is: the origin's position moved forward by the range its camera measured, along its heading. */
@@ -310,7 +321,7 @@ class MeshSession(private val context: Context, val preferences: AppPreferences)
         val toOrigin = own?.let { distanceM(it, origin) }
         val inference = f.kind?.let { k -> toOrigin?.let { NodeInference.at(k, f.detail, it, own.speedMps) } }
         return EventTrace(f.id, f.kind, f.detail, false, f.forwarder, SystemClock.elapsedRealtime(), toOrigin, inference, hops = f.hop,
-            canRelay = f.ttl > 0 && state.value.chain.let { c -> c.size > (c.firstOrNull { it.self }?.rank ?: Int.MAX_VALUE) + 1 }, viaRank = f.rank)
+            canRelay = f.ttl > 0 && (state.value.mode == Mode.ROAD || state.value.chain.let { c -> c.size > (c.firstOrNull { it.self }?.rank ?: Int.MAX_VALUE) + 1 }), viaRank = f.rank)
     }
 
     /** Publishes a hazard this phone found. [at] is where the hazard is, when the caller knows better than the camera range. */

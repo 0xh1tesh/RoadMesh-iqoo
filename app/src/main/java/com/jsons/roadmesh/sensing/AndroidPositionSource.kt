@@ -19,8 +19,11 @@ class AndroidPositionSource(context: Context) : PositionSource, LocationListener
     override fun onLocationChanged(location: Location) { if (!location.isMock) last = Location(location) }
     override fun current(): GeoFix? {
         val l = last ?: return null
-        if (SystemClock.elapsedRealtimeNanos() - l.elapsedRealtimeNanos > 5_000_000_000L || !l.hasAccuracy() || l.accuracy > 30) return null
+        val age = SystemClock.elapsedRealtimeNanos() - l.elapsedRealtimeNanos
+        if (age < 0 || age > 5_000_000_000L || !l.hasAccuracy() || !l.accuracy.isFinite() || l.accuracy !in 0f..30f) return null
         return GeoFix(l.latitude, l.longitude, if (l.hasBearing()) l.bearing.toDouble() else null,
-            if (l.hasSpeed()) l.speed.toDouble() else null, false)
+            if (l.hasSpeed()) l.speed.toDouble() else null, false, l.accuracy.toDouble(),
+            if (l.hasBearingAccuracy()) l.bearingAccuracyDegrees.toDouble().takeIf { it.isFinite() && it in 0.0..180.0 } else null)
+            .takeIf { it.valid() }
     }
 }

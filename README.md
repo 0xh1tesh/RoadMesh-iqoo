@@ -11,8 +11,15 @@ This is an **expandable experimental base**, not a final architecture or a produ
 | `simulator/scene/` | Reusable camera/AR car scene and optional detector/dataset feed |
 | `simulator/core/` | Scene math, calibration, pose protocol, interpolation and braking timeline |
 | `simulator/app/` | Thin standalone scene launcher |
+| `tools/junction_lab/` | Offline SUMO comparisons, logical transport/response models and recorded-results viewer |
 
 Start with [architecture](docs/architecture.md), [implementation status](docs/implementation-plan.md), and the [three-phone rehearsal](docs/demo-runbook.md). Earlier research designs are preserved in `docs/archive/`; they are not descriptions of shipped behavior.
+
+The new [Junction Lab](tools/junction_lab/README.md) compares no advice, local sensing and mesh-informed warnings in matched SUMO runs, using a shared Kotlin policy and an offline visual replay. Its [first measured results](docs/junction-lab-results.md) are a baseline for future algorithms, separate from the three-phone app.
+
+The **0.4.1 swarm preview** adds a Swarm tab with a configurable stopped-bus comparison, relay loss and alternate paths, evidence expiry, and a synthetic learning experiment. The phone view uses actual session records, preserves original report identities, groups neighbours by movement and uncertainty, and supports manual road-narrowing reports. See the [jury demo guide](docs/swarm-jury-demo.md) for the demonstration, implemented scope and next field experiment.
+
+Download the APK from the [0.4.1 swarm preview release](https://github.com/0xh1tesh/RoadMesh-iqoo/releases/tag/v0.4.1-swarm-preview). This debug build uses a different signing certificate from the published 0.4 APK, so it cannot update that installation in place. Export any reports before replacing an older installation; uninstalling removes its local app data.
 
 ## Build
 
@@ -24,7 +31,7 @@ JDK 17, Android SDK 36, and the checked-in Gradle 8.14.6 wrapper. Set `JAVA_HOME
 
 Install **the same** `app/build/outputs/apk/debug/app-debug.apk` on all three phones. Select a different role on each. The root build's standalone harness is `simulator/app/build/outputs/apk/debug/simulator-app-debug.apk` and has a different application ID. The RoadMesh APK defaults to the arm64 loaners; override with `-ProadmeshAbis=arm64-v8a,x86_64` for additional targets.
 
-The optional YOLO model is not bundled. The pitch brake works without it. To evaluate YOLO, fetch the model using `simulator/tools/fetch_model.py`, then run `:sim-core:test -PwithModelTests=true --rerun-tasks`. An explicitly requested model test fails if the asset is missing.
+The detector assets are ignored by Git. To reproduce the team's prototype clip detection, restore the two checksum-pinned models with `powershell -File tools/fetch_prototype_models.ps1` before building. This swarm-preview APK includes those models. The pitch brake and manual reports work without detection. The separate simulator model can be fetched with `simulator/tools/fetch_model.py`; its opt-in check is `:sim-core:test -PwithModelTests=true --rerun-tasks`. An explicitly requested model test fails if its asset is missing. The optional Gemma model remains a separate import.
 
 ## What is validated
 

@@ -60,6 +60,25 @@ class RoadMeshApplication : Application() {
         }
     }
     private val explained = HashSet<String>()
+    private var lastNarrowingReportMs: Long? = null
+
+    /** Manual observation at the phone's current position. The return text describes queueing, not delivery. */
+    fun reportNarrowing(): String {
+        if (!session.state.value.ready) return "Start a ready mesh session before reporting."
+        val at = session.here() ?: return "Waiting for a fresh position. The report was not queued."
+        val now = SystemClock.elapsedRealtime()
+        if (lastNarrowingReportMs?.let { now - it in 0 until 15_000 } == true) return "Report already queued. Wait 15 seconds before reporting again."
+        val replay = session.state.value.mode == com.jsons.roadmesh.core.mesh.Mode.STAGE
+        val queued = session.publish(com.jsons.roadmesh.core.mesh.LocalHazard(
+            com.jsons.roadmesh.core.mesh.HazardKind.ROAD_NARROWED,
+            if (replay) com.jsons.roadmesh.core.mesh.Provenance.REPLAY else com.jsons.roadmesh.core.mesh.Provenance.LIVE,
+            "manual road narrowing at this phone",
+            com.jsons.roadmesh.core.mesh.HazardDetail(0, preferences.vehicle, null)), at)
+        if (!queued) return "The session could not queue the report."
+        lastNarrowingReportMs = now
+        return if (replay) "Stage report queued at a synthetic position. Remote delivery is not confirmed."
+            else "Road narrowing queued at your position. Remote delivery is not confirmed."
+    }
 
     /**
      * "What is the road like?": asks the phones ahead and behind over the mesh, combines their answers with this phone's
@@ -79,7 +98,7 @@ class RoadMeshApplication : Application() {
 
     private fun answer(tag: String, question: String, picture: RoadPicture) {
         val camera = observer.flow.value.let { o ->
-            if (!(o.simulating && o.playing)) "" else " Front camera sees: " + (o.counts.entries.joinToString { (c, n) -> "$n ${c.name.lowercase()}" }.ifEmpty { "an empty road" }) + "."
+            if (!(o.simulating && o.playing)) "" else " Replay clip detections: " + (o.counts.entries.joinToString { (c, n) -> "$n ${c.name.lowercase()}" }.ifEmpty { "no current detections; visibility is unknown" }) + ". These are replay observations, not a live camera view."
         }
         val facts = "This phone is in ${withArticle(preferences.vehicle.title)}. " + picture.facts() + camera
         val plain = picture.forecast.advice.take(2).joinToString(" ")

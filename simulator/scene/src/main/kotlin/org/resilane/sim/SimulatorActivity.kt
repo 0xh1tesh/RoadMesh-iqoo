@@ -108,6 +108,7 @@ open class SimulatorActivity : ComponentActivity(), SceneHost {
             settings.showOffscreen = false
             settings.joystickHeading = false
             settings.scaleSyncGlobal = false
+            settings.localScale = 1.0f // a saved tiny scale made cars invisible
             settings.modelId = 0
             window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
@@ -408,6 +409,11 @@ open class SimulatorActivity : ComponentActivity(), SceneHost {
         RLog.i("Track", "ARCore availability: $availability")
         if (availability == ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE) {
             useFallback("ARCore does not support this phone (${Build.MODEL})")
+            return false
+        }
+        // Pitch build: never open the Play Store install flow (loaners have no store); use rotation-only mode.
+        if (pitchMode && availability != ArCoreApk.Availability.SUPPORTED_INSTALLED) {
+            useFallback("ARCore is not installed")
             return false
         }
         return try {

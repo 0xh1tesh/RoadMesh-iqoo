@@ -12,8 +12,8 @@ android {
         applicationId = "com.jsons.roadmesh"
         minSdk = 31
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.4.0"
+        versionCode = 6
+        versionName = "0.4.1-swarm-preview"
         // Loaners are arm64; override for future targets or an emulator without changing source.
         ndk { abiFilters += providers.gradleProperty("roadmeshAbis").orElse("arm64-v8a").get().split(',').map { it.trim() } }
     }
