@@ -34,8 +34,8 @@ android {
         compose = true
     }
     testOptions { unitTests.isIncludeAndroidResources = true }
-    // The ONNX detector and the dashcam clip are read in place from the APK.
-    androidResources { noCompress += listOf("onnx", "mp4") }
+    // The ONNX detector, the face model and the dashcam clip are read in place from the APK.
+    androidResources { noCompress += listOf("onnx", "mp4", "task") }
     // The HTP skel is loaded by the NPU through FastRPC by file path, so native libraries are extracted to disk.
     // Only the Hexagon generations of recent Snapdragons are kept (V75 8 Gen 3, V79 8 Elite, V81 8 Elite Gen 5).
     packaging {
@@ -61,7 +61,8 @@ dependencies {
     implementation("androidx.camera:camera-camera2:1.6.2")
     implementation("androidx.camera:camera-lifecycle:1.6.2")
     implementation("androidx.camera:camera-view:1.6.2")
-    implementation("androidx.camera:camera-mlkit-vision:1.6.2")
+    // Face Landmarker (open source, Apache-2.0) gives eyelid blendshapes, jaw opening and 478 landmarks; ML Kit is the fallback.
+    implementation("com.google.mediapipe:tasks-vision:0.10.32")
     implementation("com.google.mlkit:face-detection:16.1.7")
 
     testImplementation("junit:junit:4.13.2")

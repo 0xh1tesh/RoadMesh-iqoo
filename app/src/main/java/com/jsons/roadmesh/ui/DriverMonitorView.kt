@@ -19,6 +19,16 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.foundation.focusable
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -96,8 +106,12 @@ private fun Alertness.color() = when (this) {
         val tint = d.reading.alertness.color()
         Canvas(Modifier.fillMaxSize()) {
             val r = d.face ?: return@Canvas
-            // Corner brackets around the face, in the preview's own pixels.
-            val l = r.left.toFloat(); val t = r.top.toFloat(); val rr = r.right.toFloat(); val b = r.bottom.toFloat()
+            if (d.frameW == 0 || d.frameH == 0) return@Canvas
+            // The box is a share of the upright frame. The preview fills and crops the view and is mirrored like a mirror.
+            val scale = maxOf(size.width / d.frameW, size.height / d.frameH)
+            val offX = (size.width - d.frameW * scale) / 2f; val offY = (size.height - d.frameH * scale) / 2f
+            val l = size.width - (offX + r.right * d.frameW * scale); val rr = size.width - (offX + r.left * d.frameW * scale)
+            val t = offY + r.top * d.frameH * scale; val b = offY + r.bottom * d.frameH * scale
             val arm = (rr - l) * 0.22f; val w = 4.dp.toPx()
             for ((x, dx) in listOf(l to arm, rr to -arm)) for ((y, dy) in listOf(t to arm, b to -arm)) {
                 drawLine(tint, Offset(x, y), Offset(x + dx, y), w); drawLine(tint, Offset(x, y), Offset(x, y + dy), w)
@@ -109,7 +123,7 @@ private fun Alertness.color() = when (this) {
             modifier = Modifier.align(Alignment.TopStart).padding(10.dp)
                 .background(if (d.reading.alertness >= Alertness.AWAKE) tint else Tokens.Scrim, RoundedCornerShape(10.dp)).padding(horizontal = 12.dp, vertical = 6.dp)
                 .semantics { liveRegion = LiveRegionMode.Polite })
-        Text(listOfNotNull("Front camera · ML Kit face, on device", d.fps?.let { "%.0f fps".format(it) }).joinToString(" · "),
+        Text(listOfNotNull("Front camera", d.model ?: "starting the face model", "on device", d.fps?.let { "%.0f fps".format(it) }).joinToString(" · "),
             style = Tabular, fontSize = 12.sp, color = Tokens.Secondary,
             modifier = Modifier.align(Alignment.BottomStart).padding(8.dp).background(Tokens.Scrim, RoundedCornerShape(10.dp)).padding(horizontal = 10.dp, vertical = 6.dp))
     }
@@ -122,23 +136,25 @@ private fun Alertness.color() = when (this) {
     Text(r.reason ?: when (r.alertness) {
         Alertness.NO_FACE -> "Mount the phone so the front camera sees your face, about an arm’s length away."
         Alertness.CALIBRATING -> "Look at the road as you normally would for two seconds."
-        else -> "Watching your eyes and head. Eyes shut over a second, or a dropping head, sets off the alarm and an SOS."
+        else -> "Watching your eyes, mouth and head. Eyes shut over a second, or a dropping head, sets off the alarm. The SOS goes out only if you do not answer."
     }, color = Tokens.Muted, fontSize = 16.sp, lineHeight = 23.sp)
     Row(horizontalArrangement = Arrangement.spacedBy(22.dp), verticalAlignment = Alignment.Bottom) {
         DriverMetric("%.1f s".format(r.eyesClosedS), "eyes shut", if (r.eyesClosedS >= 1.0) Tokens.Yellow else Tokens.Paper)
         DriverMetric(r.perclos?.let { "${(it * 100).roundToInt()}%" } ?: "…", "shut, last 30 s")
         val open = listOfNotNull(d.leftEyeOpen, d.rightEyeOpen).maxOrNull()
         DriverMetric(open?.let { "${(it * 100).roundToInt()}%" } ?: "…", "eyes open")
+        DriverMetric("${r.yawns}", "yawns, 5 min")
     }
     Surface(shape = RoundedCornerShape(16.dp), color = Tokens.Panel, border = BorderStroke(1.dp, Tokens.Line), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("What sets it off", color = Tokens.Yellow, fontWeight = FontWeight.Bold, fontSize = 13.sp, letterSpacing = 0.6.sp)
             Text("Drowsy: eyes shut 1.2 s, or shut for 30% of the last 30 s.\nPassing out: eyes shut 3 s, the head dropping with eyes shut, or slumping out of view.\n" +
-                "Either one sounds an alarm on this phone and sends a Driver SOS over the mesh to every phone around.", color = Tokens.Secondary, fontSize = 14.sp, lineHeight = 20.sp)
+                "Either one sounds an alarm on this phone. If you do not tap, press a volume key, or look up with eyes open, a caution goes over the mesh to the phones around: " +
+                "6 s later when drowsy, 2 s later when not responding. Yawns are counted as an early sign and do not set off the alarm.", color = Tokens.Secondary, fontSize = 14.sp, lineHeight = 20.sp)
         }
     }
-    Text("SOS sent", style = MaterialTheme.typography.titleMedium)
-    if (d.sos.isEmpty()) Text("None yet. To try it, close your eyes for two seconds.", color = Tokens.Faint, fontSize = 14.sp)
+    Text("Mesh warnings sent", style = MaterialTheme.typography.titleMedium)
+    if (d.sos.isEmpty()) Text("None yet. To try it, close your eyes for two seconds and do not tap.", color = Tokens.Faint, fontSize = 14.sp)
     d.sos.forEach { SosRow(it) }
     GhostButton("Stop driver monitor", { app.observer.simulate(false) }, Modifier.fillMaxWidth())
 }
@@ -155,7 +171,11 @@ private fun Alertness.color() = when (this) {
             val ago = (SystemClock.elapsedRealtime() - s.atMs) / 1000
             Text("${s.alarm.reason} · ${if (ago < 60) "${ago} s" else "${ago / 60} min"} ago", color = Tokens.Faint, fontSize = 13.sp)
         }
-        Text(if (s.sent) "Sent" else "Not sent", color = if (s.sent) Tokens.Green else Tokens.Red, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+        Text(when {
+            !s.sent -> "Not sent"
+            s.cleared -> "Cleared"
+            else -> "Sent${if (s.repeats > 0) " ×${s.repeats + 1}" else ""}"
+        }, color = if (s.sent) Tokens.Green else Tokens.Red, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
     }
     HorizontalDivider(color = Tokens.Line)
 }
@@ -173,17 +193,28 @@ private fun Alertness.color() = when (this) {
     val base = if (severe) Tokens.Red else Tokens.Yellow
     val pulse = if (reducedMotion()) 1f else rememberInfiniteTransition(label = "wake").animateFloat(1f, 0.72f,
         infiniteRepeatable(tween(450, easing = LinearEasing), RepeatMode.Reverse), label = "pulse").value
-    val sos = d.sos.firstOrNull()?.takeIf { it.alarm == alarm }
-    Box(Modifier.fillMaxSize().background(base.copy(alpha = pulse)).semantics { liveRegion = LiveRegionMode.Assertive }) {
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    Box(Modifier.fillMaxSize().background(base.copy(alpha = pulse)).semantics { liveRegion = LiveRegionMode.Assertive }
+        .pointerInput(Unit) { detectTapGestures(onTap = { acknowledge() }) }
+        .focusRequester(focus).focusable()
+        .onPreviewKeyEvent { e ->
+            // A volume key is a deliberate answer that needs no looking at the screen.
+            val volume = e.key == Key.VolumeUp || e.key == Key.VolumeDown
+            if (volume && e.type == KeyEventType.KeyDown) acknowledge()
+            volume
+        }) {
         Column(Modifier.fillMaxSize().padding(28.dp), verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically)) {
             Text("WAKE UP", color = Tokens.Ink, fontWeight = FontWeight.Black, fontSize = 64.sp, lineHeight = 64.sp,
                 style = MaterialTheme.typography.displayLarge)
             Text(if (severe) "You stopped responding: ${alarm.reason}." else "You are falling asleep: ${alarm.reason}. Pull over when it is safe.",
                 color = Tokens.Ink, fontSize = 20.sp, lineHeight = 27.sp, fontWeight = FontWeight.SemiBold)
+            val sent = d.sos.firstOrNull()
             Text(when {
-                sos == null -> "SOS already sent in the last minute."
-                sos.sent -> "SOS sent to the phones around you over the mesh."
-                else -> "SOS not sent: the mesh is not running. Start the mesh so nearby phones are warned."
+                d.sosActive && sent?.sent == false -> "Warning not sent: the mesh is not running. Start the mesh so nearby phones are warned."
+                d.sosActive -> "A caution is going out to the phones around you over the mesh. Tap to stop it."
+                d.sosInS != null -> "Tap anywhere, or press a volume key. In ${d.sosInS} s a caution goes to the phones around you."
+                else -> "Tap anywhere, or press a volume key."
             }, color = Tokens.Ink, fontSize = 16.sp, lineHeight = 22.sp, modifier = Modifier.background(Tokens.Paper.copy(alpha = 0.35f), RoundedCornerShape(12.dp)).padding(12.dp))
             Spacer(Modifier.height(12.dp))
             Button(onClick = acknowledge, shape = RoundedCornerShape(20.dp), colors = ButtonDefaults.buttonColors(containerColor = Tokens.Ink, contentColor = Tokens.Paper),
