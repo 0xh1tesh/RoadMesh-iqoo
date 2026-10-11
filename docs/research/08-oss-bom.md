@@ -175,4 +175,4 @@ Canonical pages. Not every link was re-fetched in this session.
 15. https://huggingface.co/api/models: licence tags for google/gemma-4-*, google/gemma-3n-*, litert-community Gemma builds
 16. https://huggingface.co/google/gemma-4-E2B-it: model page (tag `license:apache-2.0`)
 17. https://github.com/tensorflow/models/tree/master/research/audioset/yamnet: YAMNet source (GitHub detects no repo licence, so NYV)
-18. C:\Users\hites\Desktop\PROJ_MAIN\gen\SOLUTION.md §4 (earlier research)
+18. team planning notes (SOLUTION.md, not in this repo) §4 (earlier research)

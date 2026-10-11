@@ -93,6 +93,6 @@ Use JDK 17 and the configured Android SDK. Restore the team's two detector asset
 .\gradlew.bat -q :core:swarmReport
 ```
 
-Screenshot tests are opt-in with `-PwithScreenshots=true`. On this machine they used Robolectric API 35 with native graphics and a 400 × 880 dp viewport; rendered outputs are in `app/build/screens/`. Final verification counts and artifact details belong to the release record; historical 0.4.1 results are recorded in [HANDOVER.md](HANDOVER.md). Re-run the checks for this version before using earlier counts.
+Screenshot tests are opt-in with `-PwithScreenshots=true`. On this machine they used Robolectric API 35 with native graphics and a 400 × 880 dp viewport; rendered outputs are in `app/build/screens/`. Final verification counts and artifact details belong to the release record; historical 0.4.1 results are in the 0.4.1 release notes. Re-run the checks for this version before using earlier counts.
 
 The preview is an unsigned-evidence advisory prototype: source IDs are claims, not authenticated independent vehicles. Position uncertainty cannot distinguish all parallel roads or flyovers. Rehearsal and controlled field evidence are the next steps, followed by calibrated mixed-traffic comparisons, message scheduling and live outcome capture.

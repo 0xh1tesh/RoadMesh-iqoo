@@ -4,7 +4,7 @@
 This is the entry point. It summarises eight research reports, a standards note, a value model, an ECC council decision, an architecture and an implementation plan. Every claim points to a file in this folder, and each file lists its own primary sources. **No timings are planned here:** the team plans its own hours. **No code was written:** the rules require all code to be written at the event, so everything here is evidence and design.
 
 ## 0. What the venue booklet changed (9 Oct)
-The printed playbook handed out at check-in ([14](14-venue-booklet.md)) settles the open questions:
+The printed playbook handed out at check-in (the venue booklet) settles the open questions:
 - **HackTracker is documented.** It "sits on the device through the build, reads model outputs, and logs inference calls, tokens and thermals in real time". Tokens count, so an on-device LLM now belongs in the build, off the alert path. "All crash and tamper logs are detected and will be penalised": never touch HackTracker, and treat an app crash as a scoring risk.
 - **The tip to win.** Build apps that run locally and on-device, "including the backend, using on-device (mobile phone) LLMs". "The highest on-device builds will be preferred for the Top Teams Pitches." RoadMesh has no server: the phone is the backend (event store, analytics and LLM debrief on the device), and the laptop only views exports through Office Kit.
 - **Format.** 48 h at roughly 55/45 Red/Green. In Red Light, laptop use is monitored and allowed only through Office Kit on the phone. Three scored evaluation rounds feed a Top Teams pitch, with the demo on the iQOO. Timings may vary and are announced at the venue.
@@ -35,11 +35,11 @@ Everything else is gated stretch or roadmap ([10](10-council-scope.md)). Pitch i
 
 | Criterion (weight) | What RoadMesh builds and shows | Evidence |
 |---|---|---|
-| End product quality (30%) | The core chain on three iQOO 15s in airplane mode. A foreground service hardened for OriginOS. A rehearsal script that passes 10/10. "A well-built simple product beats a broken complex one" | [01](01-hackathon-intel.md), [10](10-council-scope.md), [12](12-implementation-plan.md) |
+| End product quality (30%) | The core chain on three iQOO 15s in airplane mode. A foreground service hardened for OriginOS. A rehearsal script that passes 10/10. "A well-built simple product beats a broken complex one" | [10](10-council-scope.md), [12](12-implementation-plan.md) |
 | Novelty and impact (20%) | Proxy V2X for unequipped road users. A pocket beacon for riders and pedestrians, who are 69.1% of deaths. AIS-230 and ETSI semantics at byte level | [05](05-novelty-prior-art.md), [09](09-standards-alignment.md) |
-| Creative phone use (15%, HackTracker) | Camera and NPU inference, spoken alerts with haptics, and an on-device LLM producing real tokens, all running for real during every test. HackTracker officially logs inference calls, tokens and thermals. Never touch HackTracker | [01](01-hackathon-intel.md), [14](14-venue-booklet.md) |
+| Creative phone use (15%, HackTracker) | Camera and NPU inference, spoken alerts with haptics, and an on-device LLM producing real tokens, all running for real during every test. HackTracker officially logs inference calls, tokens and thermals. Never touch HackTracker | venue booklet |
 | Technical depth (15%) | NPU detector ladder with an on-screen backend and ms; BLE extended advertising with contention relay; signed 27-byte protocol; trust tiers; measured p50/p95 | [02](02-radio-mesh.md), [04](04-on-device-ai-stack.md), [11](11-architecture.md) |
-| Office Kit usage (10%, HackTracker) | Mirroring for the demo; APKs, models and stats exports moved by file transfer; Red Light work driven through remote control. No developer API exists, so usage must be real | [01](01-hackathon-intel.md), [07](07-validation-demo.md) |
+| Office Kit usage (10%, HackTracker) | Mirroring for the demo; APKs, models and stats exports moved by file transfer; Red Light work driven through remote control. No developer API exists, so usage must be real | [07](07-validation-demo.md) |
 | Demo and pitch (10%) | Airplane mode shown on the projector; a disclosed demo track and hop allowlist; see-through with a cardboard "bus"; a backup video | [07](07-validation-demo.md) |
 
 ## 3. Evidence that carries the pitch
@@ -83,9 +83,9 @@ Everything else is gated stretch or roadmap ([10](10-council-scope.md)). Pitch i
 | Positions | Disclosed DemoTrack on stage; live GNSS outside | TraceReplay; system mock location | Hidden simulation | [07](07-validation-demo.md) |
 | Security | Ed25519 envelope (key + signature, 123 B), 2-byte time, trust tiers, plausibility checks | Unsigned legacy with tiers | RSSI as a hard reject; per-message Keystore signing | [06](06-trust-safety-regulatory.md), [11](11-architecture.md) |
 | Privacy | Sender ID rotated with a fresh advertising set; positions rounded to about 1 m | — | Stable IDs; 1e-7° positions | [06](06-trust-safety-regulatory.md) |
-| Local LLM (core, off the alert path) | Qualcomm GenieX on the NPU | LiteRT-LM (Gemma class) on CPU (the GPU may lack OpenCL), then llama.cpp on CPU, then templates | Cloud LLM in the product; any LLM on the alert path | [04](04-on-device-ai-stack.md), [14](14-venue-booklet.md) |
+| Local LLM (core, off the alert path) | Qualcomm GenieX on the NPU | LiteRT-LM (Gemma class) on CPU (the GPU may lack OpenCL), then llama.cpp on CPU, then templates | Cloud LLM in the product; any LLM on the alert path | [04](04-on-device-ai-stack.md) |
 | Siren (stretch) | YAMNet siren classes, smoothed over frames | — | Single-frame triggers | [03](03-sensing-perception.md) |
-| Laptop role | Office Kit mirroring and file transfer of exports; static viewer as stretch | — | A LAN or cloud dashboard as the product path | [01](01-hackathon-intel.md), [10](10-council-scope.md) |
+| Laptop role | Office Kit mirroring and file transfer of exports; static viewer as stretch | — | A LAN or cloud dashboard as the product path | [10](10-council-scope.md) |
 | Licences | `LICENSE` and `ATTRIBUTION.md` in the first commit; decide the detector licence at the start | — | Pasting code from GPL mesh apps | [08](08-oss-bom.md) |
 
 ## 6. Architecture and plan, in brief
@@ -147,8 +147,8 @@ Everything else is gated stretch or roadmap ([10](10-council-scope.md)). Pitch i
 - Pedestrians are **20.6%** of deaths, not "about 24%". The 2025 totals in RESEARCH.md are unverified [05](05-novelty-prior-art.md).
 - Rephrase the **"3.8×"** line (see evidence point 7) [03](03-sensing-perception.md).
 - The **"BT5 700–950 ms in a vehicle"** figure came from Raspberry Pi boards running Bluetooth Mesh, not phones [02](02-radio-mesh.md).
-- The **iQOO 15 spec sheet lists neither NavIC nor UWB**, so drop both claims [01](01-hackathon-intel.md).
-- The **laptop code freeze** is the end of the last Green window, not the third checkpoint [01](01-hackathon-intel.md).
+- The **iQOO 15 spec sheet lists neither NavIC nor UWB**, so drop both claims (event rules).
+- The **laptop code freeze** is the end of the last Green window, not the third checkpoint (event rules).
 - The **₹5–7k OBU cost** is not in the AIS-230 draft. Add the Oct 2027 voluntary date and G.S.R. 466(E) [05](05-novelty-prior-art.md).
 - **Hard braking has two tiers.** 0.45 g is "hard"; emergency is −7 m/s² [09](09-standards-alignment.md).
 
@@ -179,7 +179,6 @@ Each is either a first check above or is labelled in its report.
 ## Files
 | File | What it holds |
 |---|---|
-| [01](01-hackathon-intel.md) | Rules, schedule, HackTracker, Office Kit, loaner specs, rubric table |
 | [02](02-radio-mesh.md) | Android BLE facts from AOSP source, radio parameters, fallback ladder |
 | [03](03-sensing-perception.md) | Hard brake, crash, alignment, TTC, sirens: thresholds with papers |
 | [04](04-on-device-ai-stack.md) | NPU paths, AI bill of materials, LLM and speech options |
@@ -192,5 +191,4 @@ Each is either a first check above or is labelled in its report.
 | [10](10-council-scope.md) | ECC council: scope decision |
 | [11](11-architecture.md) | ECC architect: architecture, protocol v2, ADRs |
 | [12](12-implementation-plan.md) | Dependency-ordered implementation plan |
-| [14](14-venue-booklet.md) | Official venue booklet, transcribed |
 | [PRD](../.claude/prds/roadmesh.prd.md) | ECC product requirements |

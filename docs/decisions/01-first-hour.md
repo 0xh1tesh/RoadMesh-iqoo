@@ -3,12 +3,12 @@
 Status key: [x] done · [ ] open · [~] needs the loaner phones
 
 ## A. Laptop toolchain (lead's laptop, checked 9 Oct)
-- [x] Android SDK at `C:\Users\hites\dev_tools\android-sdk`: platforms 34, 35, 36; build-tools 34.0.0, 36.0.0; cmdline-tools; NDK; cmake; adb 37.0.1
-- [x] JDK 17 at `C:\Users\hites\dev_tools\jdk-17.0.14+7` (the default `java` on PATH is JDK 8: do not use it)
+- [x] Android SDK at `<Android SDK path>`: platforms 34, 35, 36; build-tools 34.0.0, 36.0.0; cmdline-tools; NDK; cmake; adb 37.0.1
+- [x] JDK 17 at `<JDK 17 path>` (the default `java` on PATH is JDK 8: do not use it)
 - [ ] `ANDROID_HOME`, `JAVA_HOME` (17) and PATH not set. Per shell:
   ```powershell
-  $env:ANDROID_HOME="C:\Users\hites\dev_tools\android-sdk"
-  $env:JAVA_HOME="C:\Users\hites\dev_tools\jdk-17.0.14+7"
+  $env:ANDROID_HOME="<Android SDK path>"
+  $env:JAVA_HOME="<JDK 17 path>"
   $env:Path="$env:JAVA_HOME\bin;$env:ANDROID_HOME\platform-tools;$env:ANDROID_HOME\cmdline-tools\latest\bin;$env:Path"
   ```
 - [ ] No Android Studio and no `gradle` command on this laptop. Either install Android Studio, or install Gradle and generate the wrapper. Other teammates: check theirs.

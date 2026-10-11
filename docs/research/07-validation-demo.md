@@ -117,7 +117,7 @@
 18. Android BatteryManager: https://developer.android.com/reference/android/os/BatteryManager
 19. Ni et al., The broadcast storm problem (MobiCom 1999): https://doi.org/10.1145/313451.313525
 20. Ultralytics QNN integration (via SOLUTION.md): https://github.com/ultralytics/ultralytics/blob/main/docs/en/integrations/qnn.md
-21. Earlier research, latency budget and scan limits: C:\Users\hites\Desktop\PROJ_MAIN\gen\SOLUTION.md §4
+21. Earlier research, latency budget and scan limits: team planning notes (SOLUTION.md, not in this repo) §4
 22. FusedLocationProviderClient (setMockMode, setMockLocation): https://developers.google.com/android/reference/com/google/android/gms/location/FusedLocationProviderClient
 23. Android LocationManager (test providers): https://developer.android.com/reference/android/location/LocationManager
 24. GNSS detection of attenuating environments: https://arxiv.org/abs/2007.14329

@@ -1,6 +1,6 @@
 ﻿# Implementation status — expandable stage base
 
-The original larger roadmap is preserved in [archive/implementation-plan-research.md](archive/implementation-plan-research.md). It includes planned features that are not shipped. The current architecture and protocol are revisioned starting points, not final commitments.
+The current architecture and protocol are revisioned starting points, not final commitments.
 
 ## Implemented
 

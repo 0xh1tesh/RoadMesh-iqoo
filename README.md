@@ -17,7 +17,7 @@ Start with the [automatic drive guide](docs/AUTOMATED_DRIVE.md) and [jury demons
 | `simulator/app/` | Thin standalone scene launcher |
 | `tools/junction_lab/` | Offline SUMO comparisons, logical transport/response models and recorded-results viewer |
 
-The earlier [architecture](docs/architecture.md), [implementation status](docs/implementation-plan.md) and [three-phone rehearsal](docs/demo-runbook.md) document the original stage harness. The automatic drive guide describes the current primary flow. Earlier research remains in `docs/archive/`.
+The earlier [architecture](docs/architecture.md), [implementation status](docs/implementation-plan.md) and [three-phone rehearsal](docs/demo-runbook.md) document the original stage harness. The automatic drive guide describes the current primary flow.
 
 The new [Junction Lab](tools/junction_lab/README.md) compares no advice, local sensing and mesh-informed warnings in matched SUMO runs, using a shared Kotlin policy and an offline visual replay. Its [first measured results](docs/junction-lab-results.md) are a baseline for future algorithms, separate from the three-phone app.
 

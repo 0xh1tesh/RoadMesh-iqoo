@@ -27,7 +27,7 @@
 - **First-hour questions for organisers:** what HackTracker counts as on-device AI and voice (any API, or only some); whether a vendor sample app pattern and pre-trained weights count as allowed OSS with attribution; the submission cut-off; whether Office Kit mirroring works without internet.
 
 ### Amendment after the venue booklet (9 Oct, integrator)
-The printed playbook makes two statements ([14](14-venue-booklet.md)):
+The printed playbook makes two statements (the venue booklet):
 - HackTracker "reads model outputs, and logs inference calls, tokens and thermals in real time".
 - Its tip to win: on-device LLMs earn brownie points, and "the highest on-device builds will be preferred for the Top Teams Pitches".
 

@@ -202,7 +202,7 @@ Implications (inference): scanning, not advertising, dominates radio cost; RoadM
 22. https://gerrit.omnirom.org/plugins/gitiles/android_system_security/+/e36d8b7e8f59cf47bf887679fd67b1e6e0a44966%5E%21 keystore2 Curve25519 (AOSP mirror, search summary)
 23. https://developer.android.com/reference/kotlin/android/bluetooth/le/AdvertisingSetParameters.Builder advertising parameters (read)
 24. https://doi.org/10.1038/s41586-021-03606-z Wymant 2021, NHS app (numbers not read)
-25. C:\Users\hites\Desktop\PROJ_MAIN\gen\SOLUTION.md packet format and legacy-advert limit (internal)
+25. team planning notes (SOLUTION.md, not in this repo) packet format and legacy-advert limit (internal)
 26. https://www.autocarindia.com/industry/morth-proposes-mandatory-v2v-communication-systems-from-october-2028-440398 AIS-230 draft (via SOLUTION.md; not verified by A6)
 27. https://www.livelaw.in/amp/know-the-law/use-of-mobile-phone-while-driving-is-now-an-offence-147890 s.184 after the 2019 amendment (search summary)
 28. https://lawx.in/acts/section/46/470/4481 s.184 text mirror (search summary; indiacode PDF not opened)
